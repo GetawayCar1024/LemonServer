@@ -13,6 +13,7 @@
 #include <QList>
 #include <QObject>
 #include <QPair>
+#include <QSet>
 #include <QString>
 #include <QVector>
 
@@ -55,6 +56,10 @@ class ContestManager : public QObject {
 	QJsonArray scanNewTasks() const;
 	int addTasks(const QJsonArray &tasks);
 	QJsonObject cleanupSourceFiles(bool backup);
+	// A file or folder under source/<who>/<rest...> was changed through the API: the results of the
+	// affected tasks are outdated, mark them as not judged (so that "unjudged" picks them up again).
+	// An empty `rest` means the whole folder of the contestant. Returns the number of cells marked.
+	int markSourceChanged(const QString &who, const QStringList &rest);
 
 	// LemonServer's own contest properties, stored in <contest>/lemonserver.json next to the .cdf
 	// (the .cdf format stays LemonLime's).
@@ -111,6 +116,8 @@ class ContestManager : public QObject {
 	QDateTime judgeStarted;
 	QDateTime judgeFinished;
 	QDateTime lastSave;
+	// cells ("<contestant>\n<task index>") whose source changed while judging; marked again afterwards
+	QSet<QString> changedWhileJudging;
 	qint64 nextEventId = 1;
 	QList<QJsonObject> events;
 };

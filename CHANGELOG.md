@@ -1,10 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
-- 比赛时间（可不设置）：比赛进行中不能查看成绩、详细结果、源程序、导出和统计，只显示提交情况（代码长度）和每份代码是否已评测；评测日志中不显示每个测试点的结果。网页中的“比赛设置”或 `PUT /api/contests/{name}` 的 `startTime` / `endTime`。
-- 比赛新增 down.zip 属性（可不设置，备用）：网页中上传或指定比赛文件夹中的文件，`GET / PUT / DELETE /api/contests/{name}/down-zip`。
-- 这些属性保存在比赛文件夹的 `lemonserver.json` 中，`.cdf` 格式不变。
+**下载**
+
+- Windows x64：`LemonServer-0.1.1-windows-x64.zip`，解压后双击 `start-server.bat`。
+- Ubuntu 22.04 / 24.04 x64：`sudo apt install ./lemonserver_0.1.1_ubuntu_amd64.deb`，然后运行 `lemonserver --port 8080`。
+
+**新功能**
+
+- 比赛时间（可不设置）：比赛中不能查看成绩、详细结果、源程序、导出和统计，只显示提交情况（代码长度）和是否已评测；评测日志不显示测试点结果。比赛结束后不能再修改时间。在“比赛设置”中设置，或用 `PUT /api/contests/{name}` 的 `startTime` / `endTime`。
+- down.zip（可不设置，备用）：上传或指定比赛文件夹中的文件，`GET / PUT / DELETE /api/contests/{name}/down-zip`。
+- 以上属性保存在比赛文件夹的 `lemonserver.json` 中，`.cdf` 格式不变。
+- 通过网页或 API 修改 `source/` 下的提交（上传、编辑、解压、删除、移动、重命名）后，对应结果自动变为未评测。
+- `POST /api/contests/{name}/judge` 新增 `"refresh": true`，评测前先刷新选手。
 
 ## 0.1.0
 

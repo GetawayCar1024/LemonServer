@@ -420,6 +420,12 @@ bool ContestManager::setContestTime(const QDateTime &start, const QDateTime &end
 		*error = tr("No contest yet");
 		return false;
 	}
+	if (start == startTime() && end == endTime())
+		return true;
+	if (endTime().isValid() && QDateTime::currentDateTimeUtc() >= endTime()) {
+		*error = tr("The contest has ended, its time can no longer be changed");
+		return false;
+	}
 	if (start.isValid() != end.isValid()) {
 		*error = tr("Set both the start and the end time, or neither");
 		return false;
@@ -726,6 +732,45 @@ QJsonObject ContestManager::cleanupSourceFiles(bool backup) {
 	return result;
 }
 
+int ContestManager::markSourceChanged(const QString &who, const QStringList &rest) {
+	if (! contest)
+		return 0;
+	Contestant *ct = contest->getContestant(who);
+	if (! ct)
+		return 0; // a new contestant: "refresh" adds it unjudged
+	const auto taskList = contest->getTaskList();
+	int marked = 0;
+	for (int j = 0; j < taskList.size(); j++) {
+		const Task *task = taskList[j];
+		bool hit = rest.isEmpty();
+		if (! hit && rest.size() >= 2)
+			hit = rest.first() == task->getSourceFileName(); // <who>/<task>/...
+		if (! hit && rest.size() == 1) {
+			const QString base = QFileInfo(rest.first()).completeBaseName();
+			hit = rest.first() == task->getSourceFileName() || base == task->getSourceFileName();
+			if (! hit && task->getTaskType() == Task::AnswersOnly)
+				for (const auto *tc : task->getTestCaseList())
+					for (const auto &in : tc->getInputFiles())
+						hit = hit || QFileInfo(in).completeBaseName() == base;
+			if (! hit && (task->getTaskType() == Task::Communication ||
+			              task->getTaskType() == Task::CommunicationExec))
+				for (const auto &p : task->getSourceFilesPath())
+					hit = hit || QFileInfo(p).completeBaseName() == base;
+		}
+		if (! hit)
+			continue;
+		if (judging)
+			changedWhileJudging.insert(who + "\n" + QString::number(j));
+		if (ct->getCheckJudged(j)) {
+			ct->setCheckJudged(j, false);
+			marked++;
+		}
+	}
+	if (marked > 0)
+		save();
+	return marked;
+}
+
 // ----------------------------------------------------------------------------------------------
 // Judging
 // ----------------------------------------------------------------------------------------------
@@ -775,6 +820,7 @@ bool ContestManager::startJudge(const QList<std::pair<QString, QVector<int>>> &l
 	progressMaximum = total;
 	tasksDone = 0;
 	tasksTotal = count;
+	changedWhileJudging.clear();
 	judgeStarted = QDateTime::currentDateTime();
 	judgeFinished = QDateTime();
 	events.clear(); // each run has its own log; event ids keep increasing
@@ -789,6 +835,16 @@ bool ContestManager::startJudge(const QList<std::pair<QString, QVector<int>>> &l
 void ContestManager::runJudge(const QList<std::pair<QString, QVector<int>>> &list) {
 	contest->judge(list);
 	judging = false;
+	// sources replaced during the run may have been judged in their old version
+	for (const auto &key : std::as_const(changedWhileJudging)) {
+		const auto parts = key.split('\n');
+		if (Contestant *ct = contest->getContestant(parts[0])) {
+			const int j = parts[1].toInt();
+			if (j >= 0 && j < contest->getTaskList().size())
+				ct->setCheckJudged(j, false);
+		}
+	}
+	changedWhileJudging.clear();
 	judgeFinished = QDateTime::currentDateTime();
 	save();
 	pushEvent({{"type", "finished"}, {"stopped", stopRequested}});

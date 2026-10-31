@@ -56,6 +56,8 @@ class LemonServer : public QObject {
 	bool touchesHidden(const QString &abs) const;
 	// The .cdf and lemonserver.json are managed by the server, not through the file system API.
 	bool isReservedFile(const QString &abs) const;
+	// abs was written / removed: if it is a submission under source/, mark the results outdated.
+	void sourceChanged(const QString &abs);
 
 	QJsonObject contestJson(Contest *contest) const;
 	QJsonObject contestantJson(Contest *contest, Contestant *ct) const;

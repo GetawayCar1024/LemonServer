@@ -380,6 +380,24 @@ bool LemonServer::isReservedFile(const QString &abs) const {
 	       abs.compare(QDir::cleanPath(manager->currentPropertiesPath()), kPathCase) == 0;
 }
 
+void LemonServer::sourceChanged(const QString &abs) {
+	if (! manager->current())
+		return;
+	const QString base = QDir::cleanPath(QDir(manager->currentDir()).absoluteFilePath("source"));
+	const QString path = QDir::cleanPath(abs);
+	if (path.compare(base, kPathCase) == 0) {
+		// the whole source folder: every contestant
+		for (auto *ct : manager->current()->getContestantList())
+			manager->markSourceChanged(ct->getContestantName(), {});
+		return;
+	}
+	if (! sameOrInside(path, base))
+		return;
+	const QStringList parts = path.mid(base.size() + 1).split('/', Qt::SkipEmptyParts);
+	if (! parts.isEmpty())
+		manager->markSourceChanged(parts.first(), parts.mid(1));
+}
+
 QStringList LemonServer::submissionFiles(Contest *contest, Contestant *ct, int index) const {
 	const Task *task = contest->getTask(index);
 	if (! task)
@@ -550,8 +568,8 @@ void LemonServer::setupAuthRoutes() {
 	});
 
 	server.route("/api/auth/logout", Method::Post, [this](const QHttpServerRequest &req) {
-		const auto auth = req.headers().value(QHttpHeaders::WellKnownHeader::Authorization).toByteArray();
-		if (auth.startsWith("Bearer "))
+		const auto auth = req.headers().value(QHttpHeaders::WellKnownHeader::Authorization).toByteArray().trimmed();
+		if (auth.startsWith("Bearer ") || auth.startsWith("bearer "))
 			config->dropSession(QString::fromUtf8(auth.mid(7)).trimmed());
 		return okResponse();
 	});
@@ -1424,6 +1442,12 @@ void LemonServer::setupContestRoutes() {
 		             if (! ok)
 			             return errorResponse(Status::BadRequest, "invalid JSON");
 		             const QString mode = body["mode"].toString("all");
+		             if (body["refresh"].toBool()) { // pick up new contestant folders first
+			             if (auto r = notWhileJudging())
+				             return std::move(*r);
+			             c->refreshContestantList();
+			             manager->save();
+		             }
 		             // choosing cells by their result would reveal the results
 		             if (mode != "all" && mode != "unjudged" && mode != "selected")
 			             if (auto r = notWhileRunning())
@@ -1482,7 +1506,9 @@ void LemonServer::setupContestRoutes() {
 		             }
 		             QString error;
 		             if (! manager->startJudge(toJudgeList(mapping), &error))
-			             return errorResponse(Status::Conflict, error);
+			             return QHttpServerResponse(
+			                 QJsonObject{{"error", error}, {"nothingToJudge", ! manager->isJudging() && mapping.isEmpty()}},
+			                 Status::Conflict);
 		             return jsonResponse(manager->judgeStatus(0), Status::Accepted);
 	             });
 
@@ -1744,6 +1770,7 @@ void LemonServer::setupFileRoutes() {
 			             return errorResponse(Status::InternalServerError, tr("Cannot write %1").arg(abs));
 		             f.write(req.body());
 		             f.close();
+		             sourceChanged(abs);
 		             return okResponse({{"size", double(req.body().size())},
 		                                {"modified", QFileInfo(abs).lastModified().toString("yyyy-MM-dd hh:mm:ss")}});
 	             });
@@ -1790,6 +1817,7 @@ void LemonServer::setupFileRoutes() {
 		             f.write(data);
 		             f.close();
 		             fi.refresh();
+		             sourceChanged(abs);
 		             LOG("Edited", abs, "from", req.remoteAddress().toString());
 		             return okResponse({{"size", double(fi.size())},
 		                                {"modified", fi.lastModified().toString("yyyy-MM-dd hh:mm:ss")},
@@ -1811,6 +1839,7 @@ void LemonServer::setupFileRoutes() {
 		             int files = 0;
 		             if (! extractZip(req.body(), abs, queryFlag(req, "stripTop"), &files, &error))
 			             return errorResponse(Status::BadRequest, error);
+		             sourceChanged(abs);
 		             return okResponse({{"files", files}});
 	             });
 
@@ -1855,8 +1884,10 @@ void LemonServer::setupFileRoutes() {
 			             if (abs == base || isReservedFile(abs))
 				             return errorResponse(Status::BadRequest, tr("This item cannot be deleted"));
 			             QFileInfo fi(abs);
-			             if (fi.isDir() ? QDir(abs).removeRecursively() : QFile::remove(abs))
+			             if (fi.isDir() ? QDir(abs).removeRecursively() : QFile::remove(abs)) {
 				             removed++;
+				             sourceChanged(abs);
+			             }
 		             }
 		             return okResponse({{"removed", removed}});
 	             });
@@ -1910,6 +1941,9 @@ void LemonServer::setupFileRoutes() {
 				             if (! success)
 					             return errorResponse(Status::InternalServerError,
 					                                  tr("Cannot %1 %2").arg(copy ? "copy" : "move", fi.fileName()));
+				             sourceChanged(target);
+				             if (! copy)
+					             sourceChanged(src);
 				             done.append(QDir(base).relativeFilePath(target));
 			             }
 			             return okResponse({{"items", done}});
@@ -1941,6 +1975,8 @@ void LemonServer::setupFileRoutes() {
 		             QDir().mkpath(QFileInfo(to).absolutePath());
 		             if (! QDir().rename(from, to))
 			             return errorResponse(Status::InternalServerError, tr("Cannot rename"));
+		             sourceChanged(from);
+		             sourceChanged(to);
 		             return okResponse();
 	             });
 }

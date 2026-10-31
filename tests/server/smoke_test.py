@@ -252,6 +252,15 @@ _, r = call("PUT", c, {"startTime": None, "endTime": None}, key, expect=200)
 assert not r["running"] and r["startTime"] is None
 assert next(x for x in r["contestants"] if x["name"] == "ac")["totalScore"] == 100
 call("GET", c + "/contestants/ac/source/0", token=key, expect=200)
+# the time of a contest that has ended can no longer be changed (re-sending the same values is fine)
+past = {"startTime": now - 7200000, "endTime": now - 3600000}
+call("PUT", c, past, key, expect=200)
+call("PUT", c, past, key, expect=200)
+call("PUT", c, {"startTime": now - 7200000, "endTime": now + 3600000}, key, expect=400)
+_, e = call("PUT", c, {"startTime": None, "endTime": None}, key, expect=400)
+assert "ended" in e["error"], e
+_, r = call("GET", c, token=key, expect=200)
+assert r["endTime"] == now - 3600000 and not r["running"], r
 print("contest time OK")
 
 # down.zip (optional property of a contest)
