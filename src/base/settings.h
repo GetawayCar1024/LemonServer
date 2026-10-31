@@ -14,8 +14,10 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QObject>
+#include <memory>
 
 class Compiler;
+class QSettings;
 
 struct hslTuple {
 	int h;
@@ -147,8 +149,14 @@ class Settings {
 	static QString dataPath();
 	static QString sourcePath();
 	static QString selfTestPath();
+	// Store settings in an INI file instead of the platform default location (used by lemon-server).
+	static void setSettingsFile(const QString &fileName);
+	static const QString &getSettingsFile();
 
   private:
+	static QString settingsFile;
+	static std::unique_ptr<QSettings> openSettingsStore();
+
 	QList<Compiler *> compilerList;
 	int defaultFullScore{};
 	int defaultTimeLimit{};

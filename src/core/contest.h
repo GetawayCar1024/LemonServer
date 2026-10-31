@@ -80,4 +80,7 @@ class Contest : public QObject {
 	void contestantJudgedDisplay(const QString &, const int, const int);
 	void compileError(int, int);
 	void stopJudgingSignal();
+	// Same events as taskJudgingStarted / compileError, but telling which contestant and task they belong to.
+	void taskJudgingStartedFor(const QString &contestant, const QString &task);
+	void compileFinishedFor(const QString &contestant, const QString &task, int compileState);
 };

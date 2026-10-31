@@ -30,6 +30,14 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(lemon-core ${LEMON_QT_LIBNAME}::DBus)
 endif()
 
+# Widget-free components shared by the desktop GUI and lemon-server.
+set(LEMON_SHARED_COMPONENT_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/component/exportutil/exportutil.cpp
+    ${CMAKE_SOURCE_DIR}/src/component/exportutil/exportutil.h
+    ${CMAKE_SOURCE_DIR}/src/component/statistics/statisticsutil.cpp
+    ${CMAKE_SOURCE_DIR}/src/component/statistics/statisticsutil.h
+    )
+
 target_include_directories(lemon-core PUBLIC
     ${CMAKE_BINARY_DIR}
     ${LEMON_BASEDIR_CORE}

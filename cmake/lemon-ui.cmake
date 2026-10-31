@@ -6,8 +6,8 @@ set(LEMON_BASEDIR_UI ${CMAKE_SOURCE_DIR}/src)
 
 aux_source_directory(${LEMON_BASEDIR_UI} LEMON_UI_SOURCES)
 
-list(APPEND LEMON_UI_SOURCES ${LEMON_BASEDIR_UI}/component/exportutil/exportutil.cpp)
-list(APPEND LEMON_UI_SOURCES ${LEMON_BASEDIR_UI}/component/exportutil/exportutil.h)
+list(APPEND LEMON_UI_SOURCES ${LEMON_SHARED_COMPONENT_SOURCES})
+list(APPEND LEMON_UI_SOURCES ${LEMON_BASEDIR_UI}/component/exportutil/exportutil_gui.cpp)
 
 set(LEMON_UI_FORMS
     ${LEMON_BASEDIR_UI}/forms/lemon.ui

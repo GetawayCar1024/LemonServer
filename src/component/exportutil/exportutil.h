@@ -19,12 +19,21 @@
 
 class Contest;
 class Contestant;
+class QWidget;
 
 class ExportUtil : public QObject {
 	Q_OBJECT
   public:
 	explicit ExportUtil(QObject *parent = nullptr);
+	// GUI entry (exportutil_gui.cpp)
 	static void exportResult(QWidget *, Contest *);
+
+	// Headless helpers (exportutil.cpp), used by both the GUI and lemon-server
+	static QString generateHtml(Contest *);
+	static QString generateSmallerHtml(Contest *);
+	static QString generateCsv(Contest *);
+	// Choose the format by suffix (html / htm / csv) and write it to fileName.
+	static bool writeResultFile(Contest *, const QString &fileName, QString *errorMessage = nullptr);
 
   private:
 	static QString getContestantHtmlCode(Contest *, Contestant *, int);

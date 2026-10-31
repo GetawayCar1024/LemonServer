@@ -109,6 +109,18 @@ QColor ColorTheme::getColorGrand(double a, double b) const { return getColorGran
 
 Settings::Settings() {}
 
+QString Settings::settingsFile;
+
+void Settings::setSettingsFile(const QString &fileName) { settingsFile = fileName; }
+
+auto Settings::getSettingsFile() -> const QString & { return settingsFile; }
+
+auto Settings::openSettingsStore() -> std::unique_ptr<QSettings> {
+	if (settingsFile.isEmpty())
+		return std::make_unique<QSettings>("LemonLime", "lemon");
+	return std::make_unique<QSettings>(settingsFile, QSettings::IniFormat);
+}
+
 auto Settings::getDefaultFullScore() const -> int { return defaultFullScore; }
 
 auto Settings::getDefaultTimeLimit() const -> int { return defaultTimeLimit; }
@@ -436,7 +448,8 @@ void Settings::copyFrom(Settings *other) {
 }
 
 void Settings::saveSettings() {
-	QSettings settings("LemonLime", "lemon");
+	auto settingsStore = openSettingsStore();
+	QSettings &settings = *settingsStore;
 	settings.setValue("UiLanguage", uiLanguage);
 	settings.beginGroup("GeneralSettings");
 	settings.setValue("DefaultFullScore", defaultFullScore);
@@ -550,7 +563,8 @@ void Settings::loadSettings() {
 	compilerList.clear();
 	colorThemeList.clear();
 	recentContest.clear();
-	QSettings settings("LemonLime", "lemon");
+	auto settingsStore = openSettingsStore();
+	QSettings &settings = *settingsStore;
 	uiLanguage = settings.value("UiLanguage", QLocale::system().name()).toString();
 	settings.beginGroup("GeneralSettings");
 	defaultFullScore = settings.value("DefaultFullScore", 10).toInt();

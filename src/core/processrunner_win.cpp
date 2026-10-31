@@ -53,7 +53,8 @@ ProcessRunnerResult WinProcessRunner::run() {
 		}
 	}
 
-	SetErrorMode(SEM_NOGPFAULTERRORBOX);
+	// Keep flags set by the application (e.g. SEM_FAILCRITICALERRORS of lemon-server) instead of replacing them.
+	SetErrorMode(GetErrorMode() | SEM_NOGPFAULTERRORBOX);
 	STARTUPINFOEX siex;
 	PROCESS_INFORMATION pi;
 	SECURITY_ATTRIBUTES sa;

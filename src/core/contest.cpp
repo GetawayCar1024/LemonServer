@@ -22,7 +22,6 @@
 #include <QDataStream>
 #include <QEventLoop>
 #include <QJsonObject>
-#include <QMessageBox>
 #include <algorithm>
 #include <utility>
 
@@ -179,6 +178,13 @@ void Contest::judge(const QVector<std::pair<Contestant *, int>> &judgingTasks) {
 		connect(taskJudger, &TaskJudger::singleCaseFinished, this, &Contest::singleCaseFinished);
 		connect(taskJudger, &TaskJudger::compileError, this, &Contest::compileError);
 		connect(taskJudger, &TaskJudger::judgingStarted, this, &Contest::taskJudgingStarted);
+		const QString contestantName = contestant->getContestantName();
+		const QString taskTitle = taskList[i]->getProblemTitle();
+		connect(taskJudger, &TaskJudger::judgingStarted, this,
+		        [this, contestantName, taskTitle] { emit taskJudgingStartedFor(contestantName, taskTitle); });
+		connect(taskJudger, &TaskJudger::compileError, this, [this, contestantName, taskTitle](int, int state) {
+			emit compileFinishedFor(contestantName, taskTitle, state);
+		});
 		taskJudger->setTask(taskList[i]);
 		taskJudger->setSettings(settings);
 		taskJudger->setContestantName(contestant->getContestantName());
