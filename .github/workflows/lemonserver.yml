@@ -1,0 +1,183 @@
+name: LemonServer
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: "6.8.3"
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qthttpserver qtwebsockets
+          cache: true
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          v=$(sed -n 's/^set(LEMONSERVER_VERSION "\(.*\)")$/\1/p' CMakeLists.txt)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "name=LemonServer-$v-windows-x64" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_GUI=OFF -DBUILD_LEMON_TESTS=OFF -DEMBED_DOCS=OFF -DENABLE_LTO=OFF \
+            -DLEMON_BUILD_INFO="LemonServer for Windows" -DLEMON_BUILD_EXTRA_INFO="GitHub Actions ${{ github.sha }}"
+          cmake --build build --target LemonServer --parallel
+
+      - name: Package
+        shell: pwsh
+        env:
+          PKG: ${{ steps.version.outputs.name }}
+        run: |
+          New-Item -ItemType Directory -Path $env:PKG | Out-Null
+          Copy-Item build\LemonServer.exe $env:PKG
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw --no-compiler-runtime "$env:PKG\LemonServer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # ship the MSVC runtime so no VC++ redistributable has to be installed
+          $crt = Get-ChildItem -Path $env:VCToolsRedistDir -Recurse -Directory -Filter "Microsoft.VC143.CRT" |
+            Where-Object { $_.FullName -match '\\x64\\' -and $_.FullName -notmatch 'onecore|debug' } | Select-Object -First 1
+          Copy-Item "$($crt.FullName)\*.dll" $env:PKG
+          Copy-Item LICENSE, README.md $env:PKG
+          Set-Content -Encoding ascii "$env:PKG\start-server.bat" "@echo off`r`nrem Start LemonServer on port 8080, then open http://<this computer's IP>:8080/ in a browser.`r`ncd /d `"%~dp0`"`r`nLemonServer.exe --port 8080 %*`r`npause"
+          Compress-Archive -Path $env:PKG -DestinationPath "$env:PKG.zip"
+
+      - name: Smoke test
+        shell: pwsh
+        env:
+          PKG: ${{ steps.version.outputs.name }}
+        run: |
+          $p = Start-Process -FilePath "$env:PKG\LemonServer.exe" -ArgumentList "--port 8099 --config $env:RUNNER_TEMP\ls\server.json" -PassThru
+          Start-Sleep 3
+          $s = Invoke-RestMethod http://127.0.0.1:8099/api/auth/status
+          $s | ConvertTo-Json -Compress
+          Stop-Process $p.Id
+          if ($s.version -ne "${{ steps.version.outputs.version }}") { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ${{ steps.version.outputs.name }}.zip
+          if-no-files-found: error
+
+  ubuntu:
+    name: Ubuntu x64 (.deb)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y g++-13 ninja-build patchelf libgl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libegl1 libopengl0
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: qthttpserver qtwebsockets
+          cache: true
+
+      - name: Version
+        id: version
+        run: |
+          v=$(sed -n 's/^set(LEMONSERVER_VERSION "\(.*\)")$/\1/p' CMakeLists.txt)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "name=lemonserver_${v}_ubuntu_amd64" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_GUI=OFF -DBUILD_LEMON_TESTS=OFF -DEMBED_DOCS=OFF -DENABLE_LTO=OFF \
+            -DLEMON_BUILD_INFO="LemonServer for Ubuntu" -DLEMON_BUILD_EXTRA_INFO="GitHub Actions ${{ github.sha }}"
+          cmake --build build --target LemonServer --parallel
+
+      - name: Build .deb
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PKG: ${{ steps.version.outputs.name }}
+        run: bash packaging/ubuntu/build-deb.sh build/LemonServer "$VERSION" "$PKG.deb"
+
+      - name: Install test on Ubuntu 22.04 and 24.04
+        env:
+          PKG: ${{ steps.version.outputs.name }}
+        run: |
+          for img in ubuntu:22.04 ubuntu:24.04; do
+            echo "::group::$img"
+            docker run --rm -e PKG -v "$PWD:/w" "$img" bash -ec '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -qq update >/dev/null
+              apt-get -qq install -y --no-install-recommends "/w/$PKG.deb" curl >/dev/null
+              lemonserver --version
+              (lemonserver --port 8099 --config /tmp/ls/server.json >/tmp/ls.log 2>&1 &)
+              sleep 3
+              curl -fsS http://127.0.0.1:8099/api/auth/status; echo
+              curl -fsS http://127.0.0.1:8099/ | grep -q "<title>LemonServer</title>"
+              dpkg -L lemonserver | grep -q /lib/systemd/system/lemonserver.service'
+            echo "::endgroup::"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu
+          path: ${{ steps.version.outputs.name }}.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, ubuntu]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release notes
+        run: |
+          # the section of CHANGELOG.md for this version
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '/^## / {p = ($2 == v)} p' CHANGELOG.md > notes.md
+          cat notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: LemonServer ${{ github.ref_name }}
+          body_path: notes.md
+          files: dist/*

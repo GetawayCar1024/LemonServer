@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+# Contests and configuration in /var/lib/lemonserver are kept, even on purge,
+# because they are user data. Only the service account is removed on purge.
+if [ "$1" = "purge" ] && getent passwd lemonserver >/dev/null; then
+	userdel lemonserver >/dev/null 2>&1 || true
+fi
+
+exit 0

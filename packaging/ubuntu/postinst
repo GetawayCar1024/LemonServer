@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+	# system account for the systemd service
+	if ! getent passwd lemonserver >/dev/null; then
+		useradd --system --user-group --home-dir /var/lib/lemonserver --shell /usr/sbin/nologin lemonserver
+	fi
+	mkdir -p /var/lib/lemonserver
+	chown lemonserver:lemonserver /var/lib/lemonserver
+	chmod 750 /var/lib/lemonserver
+
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload >/dev/null 2>&1 || true
+	fi
+
+	cat <<'EOF'
+
+LemonServer is installed.
+  Run in a terminal:        lemonserver --port 8080
+  Or as a system service:   sudo systemctl enable --now lemonserver   (data in /var/lib/lemonserver)
+Then open http://<this computer's IP>:8080/ (default token: 123456).
+
+EOF
+fi
+
+exit 0

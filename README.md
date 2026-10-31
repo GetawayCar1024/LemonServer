@@ -1,5 +1,8 @@
 # LemonServer
 
+[![LemonServer](https://github.com/GetawayCar1024/LemonServer/actions/workflows/lemonserver.yml/badge.svg)](https://github.com/GetawayCar1024/LemonServer/actions/workflows/lemonserver.yml)
+[![Release](https://img.shields.io/github/v/release/GetawayCar1024/LemonServer)](https://github.com/GetawayCar1024/LemonServer/releases/latest)
+
 LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project_LemonLime) 的一个 fork：评测核心（`src/base`、`src/core`、导出 `result.html`、统计）和 `.cdf` 比赛格式都**原样沿用 LemonLime**，只是把 Qt Widgets 桌面界面换成了内置 HTTP 服务器、网页前端和 REST API。在任意一台能访问服务器的电脑上，用浏览器就能完成 LemonLime 的全部操作。
 
 - 基于 LemonLime 0.3.7（上游提交 `69aa223`），上游说明见 [README.LemonLime.md](README.LemonLime.md)。
@@ -21,6 +24,23 @@ LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project
 | 浅色 / 深色 / 跟随系统 | 深色模式 |
 | 设置：常规设置、编译器（含自动检测）、评测语言与配色 | 选项对话框、添加编译器向导 |
 | 访问令牌（默认 `123456`，可在网页修改）、API Key 管理、默认比赛位置 | —（LemonServer 专有） |
+
+## 安装
+
+从 [Releases](https://github.com/GetawayCar1024/LemonServer/releases/latest) 下载：
+
+- **Windows x64**：`LemonServer-<版本>-windows-x64.zip`，解压后双击 `start-server.bat`。已包含 Qt 与 MSVC 运行库，无需另外安装。
+- **Ubuntu 22.04 / 24.04 x64**：`lemonserver_<版本>_ubuntu_amd64.deb`
+
+  ```bash
+  sudo apt install ./lemonserver_<版本>_ubuntu_amd64.deb   # 会自动安装评测所需的 bubblewrap
+  lemonserver --port 8080                                   # 直接运行
+  sudo systemctl enable --now lemonserver                   # 或作为系统服务运行（数据在 /var/lib/lemonserver）
+  ```
+
+  程序安装在 `/opt/lemonserver`（自带 Qt 等依赖库），命令为 `lemonserver`。Ubuntu 24.04 默认限制非特权用户命名空间，如果评测时出现“无法启动程序”且日志中提到 bwrap，可执行 `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`。
+
+服务器上还需要安装选手程序所用的编译器（如 g++、python3），首次启动会自动检测。
 
 ## 编译
 

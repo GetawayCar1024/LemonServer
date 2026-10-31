@@ -1,0 +1,19 @@
+[Unit]
+Description=LemonServer - web judging server for OI contests
+Documentation=https://github.com/GetawayCar1024/LemonServer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=lemonserver
+Group=lemonserver
+WorkingDirectory=/var/lib/lemonserver
+Environment=HOME=/var/lib/lemonserver
+# Configuration (token, API keys, default contest folder) and judging settings live in /var/lib/lemonserver.
+# To change the port, run `systemctl edit lemonserver` and override ExecStart.
+ExecStart=/usr/bin/lemonserver --host 0.0.0.0 --port 8080 --config /var/lib/lemonserver/server.json
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
