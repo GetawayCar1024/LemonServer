@@ -1,13 +1,13 @@
 # Changelog
 
-## 1.0.0
+## 0.1.0
 
 LemonServer 的第一个版本：基于 LemonLime 0.3.7 的评测核心，提供网页界面和 REST API。
 
 **下载**
 
-- Windows x64：`LemonServer-1.0.0-windows-x64.zip`，解压后双击 `start-server.bat`（已包含 Qt 与 MSVC 运行库）。
-- Ubuntu 22.04 / 24.04 x64：`lemonserver_1.0.0_ubuntu_amd64.deb`，`sudo apt install ./lemonserver_1.0.0_ubuntu_amd64.deb`，然后运行 `lemonserver --port 8080`，或 `sudo systemctl enable --now lemonserver`。
+- Windows x64：`LemonServer-0.1.0-windows-x64.zip`，解压后双击 `start-server.bat`（已包含 Qt 与 MSVC 运行库）。
+- Ubuntu 22.04 / 24.04 x64：`lemonserver_0.1.0_ubuntu_amd64.deb`，`sudo apt install ./lemonserver_0.1.0_ubuntu_amd64.deb`，然后运行 `lemonserver --port 8080`，或 `sudo systemctl enable --now lemonserver`。
 
 启动后用浏览器打开 `http://<服务器IP>:8080/`，默认访问令牌为 `123456`，请在首次登录后修改。服务器上需要安装选手程序使用的编译器（如 g++）；Ubuntu 上评测依赖 bubblewrap（安装 .deb 时会自动安装）。
 
