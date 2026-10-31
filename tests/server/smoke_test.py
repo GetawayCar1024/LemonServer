@@ -214,4 +214,66 @@ c = "/api/contests/" + urllib.parse.quote(CONTEST)
 # zip download of data folder
 _, z = call("GET", c + "/files/download" + q(root="data", path="aplusb"), token=key, expect=200)
 assert {"1.in", "4.out", "chk.cpp"} <= set(zipfile.ZipFile(io.BytesIO(z)).namelist())
+
+# contest time: during it scores, details, source code, export and statistics are hidden
+now = int(time.time() * 1000)
+call("PUT", c, {"startTime": now - 60000, "endTime": now - 120000}, key, expect=400)
+call("PUT", c, {"startTime": now - 60000, "endTime": None}, key, expect=400)
+_, r = call("PUT", c, {"startTime": now - 60000, "endTime": now + 3600000}, key, expect=200)
+assert r["running"] and r["startTime"] == now - 60000, r
+ac = next(x for x in r["contestants"] if x["name"] == "ac")
+assert "totalScore" not in ac and "score" not in ac["tasks"][0] and "compileState" not in ac["tasks"][0], ac
+assert ac["tasks"][0]["submitted"] and ac["tasks"][0]["codeSize"] > 0 and ac["tasks"][0]["judged"], ac
+for path in ["/contestants/ac", "/contestants/ac/source/0", "/export", "/statistics", "/state-summary",
+             "/files/download" + q(root="source", path="ac"), "/files/download" + q(root="contest", path=""),
+             "/files/download" + q(root="contest", path=CONTEST + ".cdf")]:
+    _, e = call("GET", c + path, token=key, expect=403)
+    assert e["contestRunning"], e
+call("POST", c + "/judge", {"mode": "state", "resultStates": [1]}, key, expect=403)
+call("POST", c + "/files/copy", {"root": "contest", "paths": ["source/ac"], "to": "data"}, key, expect=403)
+call("POST", c + "/files/compile", {"root": "source", "path": "ac/aplusb.cpp"}, key, expect=403)
+call("GET", c + "/files" + q(root="source", path="ac"), token=key, expect=200)
+call("GET", c + "/files/download" + q(root="data", path="aplusb/1.in"), token=key, expect=200)
+call("POST", c + "/judge", {"mode": "selected", "items": [{"contestant": "ac"}]}, key, expect=202)
+since = 0
+events = []
+while True:
+    _, st = call("GET", c + "/judge/status" + q(since=since), token=key, expect=200)
+    events += st["events"]
+    since = st["lastEventId"]
+    if not st["judging"]:
+        break
+    time.sleep(0.3)
+cases = [e for e in events if e["type"] == "case"]
+assert cases and all("result" not in e and "score" not in e for e in cases), cases[:2]
+_, r = call("GET", "/api/contests", token=key, expect=200)
+assert next(x for x in r["contests"] if x["name"] == CONTEST)["running"]
+_, r = call("PUT", c, {"startTime": None, "endTime": None}, key, expect=200)
+assert not r["running"] and r["startTime"] is None
+assert next(x for x in r["contestants"] if x["name"] == "ac")["totalScore"] == 100
+call("GET", c + "/contestants/ac/source/0", token=key, expect=200)
+print("contest time OK")
+
+# down.zip (optional property of a contest)
+call("GET", c + "/down-zip", token=key, expect=404)
+call("PUT", c + "/down-zip", raw=b"not a zip", token=key, expect=400)
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w") as z:
+    z.writestr("statement.txt", "A + B")
+_, r = call("PUT", c + "/down-zip", raw=buf.getvalue(), token=key, expect=200)
+assert r["downZip"]["path"] == "down.zip" and r["downZip"]["size"] == len(buf.getvalue()), r
+_, d = call("GET", c + "/down-zip", token=key, expect=200)
+assert d == buf.getvalue()
+call("PUT", c, {"downZip": "../x.zip"}, key, expect=400)
+call("PUT", c, {"downZip": "nothing.zip"}, key, expect=400)
+_, r = call("PUT", c, {"downZip": "data/aplusb/1.in"}, key, expect=200)
+assert r["downZip"]["path"] == "data/aplusb/1.in", r
+call("PUT", c, {"downZip": "down.zip"}, key, expect=200)
+call("PUT", c + "/files/text", {"root": "contest", "path": "lemonserver.json", "content": "{}"}, key, expect=400)
+call("POST", c + "/files/delete", {"root": "contest", "path": "lemonserver.json"}, key, expect=400)
+_, r = call("DELETE", c + "/down-zip" + q(deleteFile=1), token=key, expect=200)
+assert r["downZip"] is None, r
+_, r = call("GET", c + "/files" + q(root="contest", path=""), token=key, expect=200)
+assert "down.zip" not in [e["name"] for e in r["entries"]], r
+print("down.zip OK")
 print("ALL OK")

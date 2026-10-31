@@ -56,6 +56,20 @@ class ContestManager : public QObject {
 	int addTasks(const QJsonArray &tasks);
 	QJsonObject cleanupSourceFiles(bool backup);
 
+	// LemonServer's own contest properties, stored in <contest>/lemonserver.json next to the .cdf
+	// (the .cdf format stays LemonLime's).
+	static constexpr const char *kPropertiesFile = "lemonserver.json";
+	QString currentPropertiesPath() const;
+	// Contest time (both invalid = not set). During it results and source code are hidden.
+	QDateTime startTime() const;
+	QDateTime endTime() const;
+	bool isContestRunning() const;
+	bool setContestTime(const QDateTime &start, const QDateTime &end, QString *error);
+	// down.zip of the contest, relative to the contest folder (empty = not set).
+	QString downZip() const { return properties["downZip"].toString(); }
+	bool setDownZip(const QString &relativePath, QString *error);
+	QJsonObject propertiesJson() const;
+
 	// judging
 	bool startJudge(const QList<std::pair<QString, QVector<int>>> &list, QString *error);
 	void stopJudge();
@@ -77,8 +91,11 @@ class ContestManager : public QObject {
 	void connectContest();
 	void pushEvent(QJsonObject event);
 	void runJudge(const QList<std::pair<QString, QVector<int>>> &list);
+	static QJsonObject readProperties(const QString &dir);
+	bool writeProperties(QString *error);
 
 	Settings *settings;
+	QJsonObject properties;
 	ServerConfig *config;
 	Contest *contest = nullptr;
 	QString contestName;

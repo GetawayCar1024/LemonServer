@@ -17,6 +17,7 @@
 #include <optional>
 
 class Contest;
+class Contestant;
 class ContestManager;
 class ServerConfig;
 class Settings;
@@ -49,8 +50,17 @@ class LemonServer : public QObject {
 	// Opens the contest (making it current); on failure returns an error response.
 	std::optional<QHttpServerResponse> withContest(const QString &name, Contest **out);
 	std::optional<QHttpServerResponse> notWhileJudging() const;
+	// During the contest time results and source code of the current contest are hidden.
+	std::optional<QHttpServerResponse> notWhileRunning() const;
+	// abs is (inside) a folder / file that is hidden during the contest, or a folder containing one.
+	bool touchesHidden(const QString &abs) const;
+	// The .cdf and lemonserver.json are managed by the server, not through the file system API.
+	bool isReservedFile(const QString &abs) const;
 
 	QJsonObject contestJson(Contest *contest) const;
+	QJsonObject contestantJson(Contest *contest, Contestant *ct) const;
+	// Files submitted by a contestant for a task (source files, or answer files of an answers-only task).
+	QStringList submissionFiles(Contest *contest, Contestant *ct, int taskIndex) const;
 	void serveStatic(const QHttpServerRequest &req, QHttpServerResponder &responder) const;
 	void reinstallTranslation();
 

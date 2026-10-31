@@ -110,6 +110,17 @@ const cpath = (name) => '/api/contests/' + enc(name || S.contest.name);
 const fmtMem = (b) => (b < 0 ? '—' : (b / 1024 / 1024).toFixed(2) + ' MiB');
 const fmtTime = (t) => (t < 0 ? '—' : t + ' ms');
 const qs = (o) => '?' + Object.entries(o).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtDate = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+// value of <input type="datetime-local"> <-> ms since the epoch (browser's time zone)
+const toLocalInput = (ms) => (ms == null ? '' : fmtDate(ms).replace(' ', 'T'));
+const fromLocalInput = (v) => (v ? new Date(v).getTime() : null);
+// 'before' | 'running' | 'ended' | null (no contest time)
+function contestPhase(c) {
+  if (c.startTime == null) return null;
+  const now = Date.now() + (S.clockSkew || 0);
+  return now < c.startTime ? 'before' : now < c.endTime ? 'running' : 'ended';
+}
 const joinPath = (a, b) => (a ? a + '/' + b : b);
 const parentPath = (p) => p.split('/').slice(0, -1).join('/');
 
@@ -133,7 +144,10 @@ async function api(method, path, body, opt = {}) {
   if (!res.ok) {
     let msg = res.status + ' ' + res.statusText;
     if (ctype.includes('json')) {
-      try { msg = (await res.json()).error || msg; } catch (e) { /* ignore */ }
+      try {
+        const j = await res.json();
+        msg = j.contestRunning ? '比赛进行中，结束后才能查看结果和代码' : (j.error || msg);
+      } catch (e) { /* ignore */ }
     }
     if (res.status === 401 && !opt.noLoginRedirect) {
       S.session = '';
@@ -475,8 +489,10 @@ async function renderContestList() {
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); });
   const items = data.contests.map((c) => h('div', { class: 'list-item' },
     h('div', { class: 'grow', style: { cursor: 'pointer' }, onclick: () => go('#/contest/' + enc(c.name) + '/tasks') },
-      h('div', { class: 'title' }, c.title || c.name, c.current ? h('span', { class: 'pill', style: { marginLeft: '8px' } }, '已打开') : null),
-      h('div', { class: 'muted small-text' }, [c.title && c.title !== c.name ? c.name : null, `${c.tasks ?? '-'} 题`, `${c.contestants ?? '-'} 名选手`, c.modified].filter(Boolean).join(' · '))),
+      h('div', { class: 'title' }, c.title || c.name, c.current ? h('span', { class: 'pill', style: { marginLeft: '8px' } }, '已打开') : null,
+        c.startTime != null ? h('span', { style: { marginLeft: '8px' } }, contestTimeLabel(c)) : null),
+      h('div', { class: 'muted small-text' }, [c.title && c.title !== c.name ? c.name : null, `${c.tasks ?? '-'} 题`, `${c.contestants ?? '-'} 名选手`,
+        c.startTime != null ? `${fmtDate(c.startTime)} – ${fmtDate(c.endTime)}` : c.modified].filter(Boolean).join(' · '))),
     h('button', { class: 'primary', onclick: () => go('#/contest/' + enc(c.name) + '/tasks') }, '打开'),
     h('button', {
       class: 'danger', onclick: async () => {
@@ -608,7 +624,30 @@ async function importContestFolder(items) {
 // ------------------------------------------------------------------------------------------------
 async function reloadContest() {
   S.contest = await api('GET', cpath(S.contest.name));
+  S.clockSkew = S.contest.serverTime - Date.now();
   return S.contest;
+}
+
+// Re-render the contest page when the contest starts or ends, so results are hidden / shown on time.
+function scheduleContestPhaseChange() {
+  clearTimeout(S.phaseTimer);
+  const c = S.contest;
+  const phase = contestPhase(c);
+  if (phase !== 'before' && phase !== 'running') return;
+  const at = (phase === 'before' ? c.startTime : c.endTime) - (Date.now() + (S.clockSkew || 0));
+  const name = c.name;
+  // setTimeout cannot wait more than ~24.8 days; check again later in that case
+  S.phaseTimer = setTimeout(() => {
+    if (S.contest && S.contest.name === name && location.hash.startsWith('#/contest/' + enc(name))) route();
+  }, Math.min(at + 500, 2 ** 31 - 1));
+}
+
+function contestTimeLabel(c) {
+  const phase = contestPhase(c);
+  if (!phase) return null;
+  const text = { before: '未开始', running: '比赛中', ended: '已结束' }[phase];
+  return h('span', { class: 'pill contest-phase ' + phase, title: `${fmtDate(c.startTime)} – ${fmtDate(c.endTime)}` },
+    phase === 'running' ? `${text} · 至 ${fmtDate(c.endTime).slice(5)}` : text);
 }
 
 async function loadDataFiles() {
@@ -625,6 +664,8 @@ async function loadDataFiles() {
 async function renderContest(name, tab) {
   const prev = S.contest && S.contest.name;
   S.contest = await api('GET', cpath(name));
+  S.clockSkew = S.contest.serverTime - Date.now();
+  scheduleContestPhaseChange();
   if (prev !== name) {
     S.sel = { task: S.contest.tasks.length ? 0 : -1, testCase: -1, expanded: new Set() };
     S.resultSel = new Set();
@@ -640,6 +681,8 @@ async function renderContest(name, tab) {
       h('div', { class: 'segmented' }, tabs.map(([k, label]) => h('div', {
         class: k === tab ? 'active' : '', onclick: () => go('#/contest/' + enc(name) + '/' + k),
       }, label))),
+      h('button', { class: 'small', onclick: openContestProperties }, '比赛设置'),
+      contestTimeLabel(S.contest),
       h('div', { class: 'path', title: S.contest.directory }, S.contest.directory),
       h('button', { class: 'small hidden', id: 'judge-panel-toggle', onclick: () => { S.judge.panelOpen = true; renderJudgePanel(); } }, '评测日志')),
     h('div', { class: 'contest-body' }, page, h('div', { id: 'judge-panel-slot', style: { display: 'contents' } }))), title);
@@ -655,6 +698,67 @@ async function renameContest() {
   const t = await promptDlg('比赛名称', S.contest.title);
   if (t === null || !t.trim()) return;
   try { await api('PUT', cpath(), { title: t.trim() }); route(); } catch (e) { fail(e); }
+}
+
+// Contest time and down.zip (LemonServer's own contest properties)
+function openContestProperties() {
+  const c = S.contest;
+  let changed = false;
+  const start = h('input', { type: 'datetime-local', value: toLocalInput(c.startTime) });
+  const end = h('input', { type: 'datetime-local', value: toLocalInput(c.endTime) });
+  const clearTime = h('button', { class: 'small', onclick: () => { start.value = ''; end.value = ''; } }, '清除');
+  const down = h('div');
+  const zipList = h('datalist', { id: 'contest-zip-files' });
+  api('GET', cpath() + '/files' + qs({ root: 'contest', recursive: 1 })).then((r) => {
+    for (const e of r.entries) if (/\.zip$/i.test(e.path)) zipList.appendChild(h('option', { value: e.path }));
+  }).catch(() => {});
+
+  const setDown = async (fn) => {
+    try { const p = await fn(); Object.assign(S.contest, p.downZip !== undefined ? { downZip: p.downZip } : {}); changed = true; renderDown(); } catch (e) { fail(e); }
+  };
+  const renderDown = () => {
+    const d = S.contest.downZip;
+    const pathInput = h('input', { type: 'text', list: 'contest-zip-files', placeholder: '比赛文件夹中的路径，如 down.zip', style: { width: '260px' } });
+    const upload = () => pickContestUpload({ accept: '.zip' }, (fs) => fs.length && setDown(() => api('PUT', cpath() + '/down-zip', undefined, { raw: fs[0] })));
+    down.innerHTML = '';
+    down.appendChild(h('div', { class: 'row', style: { marginBottom: '8px' } },
+      d ? h('span', null, h('code', null, d.path), ' ', h('span', { class: d.exists ? 'muted small-text' : 'error-text small-text' }, d.exists ? `${formatSize(d.size)} · ${d.modified}` : '文件不存在'))
+        : h('span', { class: 'muted' }, '未设置'),
+      d && d.exists ? h('button', { class: 'small', onclick: () => download(cpath() + '/down-zip', 'down.zip') }, '下载') : null,
+      d ? h('button', { class: 'small danger', onclick: () => setDown(() => api('DELETE', cpath() + '/down-zip')) }, '清除') : null));
+    down.appendChild(h('div', { class: 'row' },
+      h('button', { class: 'small', onclick: upload }, d ? '重新上传' : '上传 zip'),
+      h('span', { class: 'muted small-text' }, '或'),
+      pathInput,
+      h('button', {
+        class: 'small', onclick: () => pathInput.value.trim() && setDown(async () => (await api('PUT', cpath(), { downZip: pathInput.value.trim() }))),
+      }, '设为 down.zip')));
+  };
+  renderDown();
+
+  modal({
+    title: '比赛设置',
+    wide: '560px',
+    body: h('div', null,
+      h('div', { class: 'section-title', style: { marginTop: 0 } }, '比赛时间'),
+      h('div', { class: 'form-grid', style: { gridTemplateColumns: '70px 1fr' } },
+        field('开始', h('div', { class: 'row' }, start, clearTime)),
+        field('结束', end)),
+      h('div', { class: 'hint', style: { marginTop: '8px' } }, '可不设置。比赛中不能查看成绩和代码，只显示提交情况和评测进度。'),
+      h('div', { class: 'section-title', style: { marginTop: '20px', textTransform: 'none' } }, 'down.zip'),
+      down,
+      h('div', { class: 'hint', style: { marginTop: '8px' } }, '可不设置，备用。上传的文件保存为比赛文件夹中的 down.zip。'),
+      zipList),
+    buttons: [{ label: '取消' }, {
+      label: '保存', primary: true, onClick: async () => {
+        const s = fromLocalInput(start.value), e = fromLocalInput(end.value);
+        if ((s === null) !== (e === null)) { toast('请同时填写开始和结束时间', 'error'); return false; }
+        if (s !== null && e <= s) { toast('结束时间必须晚于开始时间', 'error'); return false; }
+        if (start.value !== toLocalInput(c.startTime) || end.value !== toLocalInput(c.endTime)) { await api('PUT', cpath(), { startTime: s, endTime: e }); changed = true; }
+      },
+    }],
+    onClose: () => { if (changed) route(); },
+  });
 }
 
 // ---------------------------------------- tasks tab (SummaryTree + TaskEditWidget) -----------
@@ -1456,6 +1560,7 @@ function renderResultsTab(page) {
 
   const selBtn = h('button', { class: 'primary', disabled: judging || !S.resultSel.size, onclick: () => startJudge('selected', selectedList()) }, '评测选中');
   const delBtn = h('button', { class: 'danger', disabled: judging || !S.resultSel.size, onclick: () => deleteContestants(selectedList().map((x) => x.contestant)) }, '删除选中');
+  if (c.running) return renderRunningResults(page, selBtn, delBtn);
   page.appendChild(h('div', { class: 'toolbar' },
     h('button', { onclick: refreshContestants, disabled: judging }, '刷新选手'),
     h('div', { class: 'sep' }),
@@ -1516,6 +1621,58 @@ function renderResultsTab(page) {
       h('span', null, h('i', { style: { background: nf } }), 'NS 未找到源程序'),
       h('span', null, h('i', { style: { background: ce } }), 'CE 等编译失败'),
       h('span', { class: 'right' }, '单击选择 · 双击查看详情'))));
+}
+
+// During the contest time the server hides scores and source code: show the submissions (code size)
+// and whether each one has been judged.
+function renderRunningResults(page, selBtn, delBtn) {
+  const c = S.contest;
+  const judging = c.judging;
+  page.appendChild(h('div', { class: 'toolbar' },
+    h('button', { onclick: refreshContestants, disabled: judging }, '刷新选手'),
+    h('div', { class: 'sep' }),
+    selBtn,
+    h('button', { disabled: judging || !c.contestants.length, onclick: () => startJudge('all') }, '全部'),
+    h('button', { disabled: judging, onclick: () => startJudge('unjudged') }, '未评测'),
+    h('div', { class: 'sep' }),
+    delBtn,
+    h('button', { disabled: judging, onclick: cleanupFiles }, '整理文件'),
+    h('div', { class: 'right muted small-text' }, `比赛中，${fmtDate(c.endTime)} 后显示成绩`)));
+  if (!c.contestants.length) {
+    page.appendChild(h('div', { class: 'empty' }, '暂无选手。把程序放到 ', h('code', null, 'source/<选手>/'), ' 后点“刷新选手”。'));
+    return;
+  }
+  const toggle = (key, el) => {
+    if (S.resultSel.has(key)) { S.resultSel.delete(key); el.classList.remove('selected'); } else { S.resultSel.add(key); el.classList.add('selected'); }
+    selBtn.disabled = delBtn.disabled = judging || !S.resultSel.size;
+  };
+  const list = c.contestants.slice().sort((a, b) => lessFileName(a.name, b.name));
+  let submitted = 0, judged = 0;
+  const table = h('table', { class: 'grid results running' },
+    h('tr', null, h('th', null, '选手'), c.tasks.map((t) => h('th', null, t.problemTitle)), h('th', null, '已提交'), h('th', null, '已评测')),
+    list.map((ct) => {
+      const nameKey = ct.name + '|*';
+      const nameCell = h('td', { class: 'name' + (S.resultSel.has(nameKey) ? ' selected' : '') }, ct.name);
+      nameCell.addEventListener('click', () => toggle(nameKey, nameCell));
+      const sub = ct.tasks.filter((r) => r.submitted).length, jud = ct.tasks.filter((r) => r.judged).length;
+      submitted += sub; judged += jud;
+      return h('tr', null, nameCell,
+        ct.tasks.map((r, j) => {
+          const key = ct.name + '|' + j;
+          const td = h('td', { class: 'cell' + (S.resultSel.has(key) ? ' selected' : ''), title: r.sourceFile || '' },
+            r.submitted ? formatSize(r.codeSize) : h('span', { class: 'muted' }, '未提交'),
+            h('span', { class: 'judge-mark ' + (r.judged ? 'done' : '') }, r.judged ? '已评测' : '未评测'));
+          td.addEventListener('click', () => toggle(key, td));
+          return td;
+        }),
+        h('td', { class: 'muted' }, `${sub} / ${c.tasks.length}`),
+        h('td', { class: 'muted' }, `${jud} / ${c.tasks.length}`));
+    }));
+  const cells = list.length * c.tasks.length;
+  page.appendChild(h('div', { class: 'results-wrap' }, table,
+    h('div', { class: 'legend' },
+      h('span', null, `${list.length} 名选手 · 提交 ${submitted} / ${cells} · 已评测 ${judged} / ${cells}`),
+      h('span', { class: 'right' }, '格子中为代码长度 · 单击选择'))));
 }
 
 async function rejudgeByStateMenu(anchor) {
@@ -1631,6 +1788,10 @@ async function showSource(name, task) {
 
 // ---------------------------------------- statistics tab -----------------------------------
 async function renderStatisticsTab(page) {
+  if (S.contest.running) {
+    page.appendChild(h('div', { class: 'empty' }, `比赛中，${fmtDate(S.contest.endTime)} 后可查看统计。`));
+    return;
+  }
   const html = await api('GET', cpath() + '/statistics');
   page.appendChild(h('div', { class: 'toolbar' },
     h('button', { onclick: () => route() }, '刷新'),
@@ -2382,11 +2543,13 @@ function judgeLine(e) {
     case 'start': return h('div', { class: 'l1' }, `开始评测 · ${e.tasks} 项`, meta('  ' + (e.time || '')));
     case 'taskStarted': return h('div', { class: 'l2' }, h('b', null, e.contestant || ''), e.contestant ? h('span', { class: 'muted' }, ' · ') : null, e.task);
     case 'case':
+      // during the contest time the server leaves out the result of each case
+      if (e.result === undefined) return h('div', { class: 'l3 muted' }, `${e.contestant} #${e.testCase + 1}.${e.subCase + 1}  已评测`);
       return h('div', { class: 'l3' }, h('span', { class: 'muted' }, e.contestant + ' '), `#${e.testCase + 1}.${e.subCase + 1}  `, resultTag(e.result),
         e.timeUsed >= 0 ? meta(`  ${e.timeUsed} ms`) : null, e.memoryUsed >= 0 ? meta(`  ${(e.memoryUsed / 1048576).toFixed(2)} MiB`) : null,
         e.score > 0 ? h('span', { class: 'pts' }, `  +${e.score}`) : null);
     case 'dependence': return h('div', { class: 'l3 muted' }, `#${e.testCase + 1} 依赖 #${e.dependence}：`, e.status >= 1000000 ? 'Pure' : e.status < 0 ? 'Lost' : (e.status / 10000).toFixed(1) + '%');
-    case 'compile': return e.state === 0 ? null : h('div', { class: 'l3' }, h('span', { class: 'muted' }, (e.contestant || '') + ' '), h('span', { class: 'error-text' }, COMPILE_ABBR[e.state] + ' · ' + COMPILE_STATE[e.state]));
+    case 'compile': return e.state === 0 || e.state === undefined ? null : h('div', { class: 'l3' }, h('span', { class: 'muted' }, (e.contestant || '') + ' '), h('span', { class: 'error-text' }, COMPILE_ABBR[e.state] + ' · ' + COMPILE_STATE[e.state]));
     case 'stopping': return h('div', { class: 'l1 error-text' }, '正在停止…');
     case 'finished': return h('div', { class: 'l1' }, e.stopped ? '已停止' : '完成', meta('  ' + (e.time || '')));
     default: return null;
@@ -2688,7 +2851,9 @@ function renderApiDoc() {
     ['比赛', ''],
     ['GET /api/contests', '比赛列表'],
     ['POST /api/contests', '{"name","title"?} 新建'],
-    ['GET · PUT · DELETE ' + C, '打开（试题与成绩）/ 改名 {"title"} / 删除'],
+    ['GET · PUT · DELETE ' + C, '打开（试题与成绩）/ 修改 {"title"?,"startTime"?,"endTime"?,"downZip"?} / 删除'],
+    ['比赛时间', 'startTime、endTime 为毫秒时间戳或 ISO 8601，null 表示不设置；比赛中（running）不返回成绩，详细结果、源程序、导出、统计、source 下的文件返回 403'],
+    ['GET · PUT · DELETE ' + C + '/down-zip', '下载 / 上传（请求体为 zip，保存为 down.zip）/ 清除（&deleteFile=1 同时删除文件）；PUT ' + C + ' {"downZip":"路径"} 指定已有文件'],
     ['POST /api/import-contest?name=&overwrite=1', '请求体为比赛 zip（含 .cdf，可带一层顶层文件夹），导入为新比赛'],
     ['PUT /api/import-contest/file?id=&path=', '逐个上传比赛文件（id 自定，4–64 位字母数字）'],
     ['POST /api/import-contest/finish?id=&name=&overwrite=1', '完成逐个上传的导入；DELETE /api/import-contest?id= 放弃'],

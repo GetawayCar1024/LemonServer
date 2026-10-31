@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- 比赛时间（可不设置）：比赛进行中不能查看成绩、详细结果、源程序、导出和统计，只显示提交情况（代码长度）和每份代码是否已评测；评测日志中不显示每个测试点的结果。网页中的“比赛设置”或 `PUT /api/contests/{name}` 的 `startTime` / `endTime`。
+- 比赛新增 down.zip 属性（可不设置，备用）：网页中上传或指定比赛文件夹中的文件，`GET / PUT / DELETE /api/contests/{name}/down-zip`。
+- 这些属性保存在比赛文件夹的 `lemonserver.json` 中，`.cdf` 格式不变。
+
 ## 0.1.0
 
 LemonServer 的第一个版本：基于 LemonLime 0.3.7 的评测核心，提供网页界面和 REST API。

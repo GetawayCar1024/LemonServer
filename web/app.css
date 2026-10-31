@@ -322,3 +322,12 @@ table.tcm-table input.missing { border-color: var(--danger); color: var(--danger
 /* selecting rows with Shift/Ctrl must not select the text of the inputs in between */
 table.tcm-table td.sub, table.tcm-table tr.case td.c { user-select: none; -webkit-user-select: none; }
 table.tcm-table input { user-select: text; -webkit-user-select: text; }
+
+/* contest time */
+.pill.contest-phase.before { background: rgba(0, 122, 255, .12); color: var(--blue); }
+.pill.contest-phase.running { background: rgba(255, 149, 0, .16); color: #c26a00; }
+:root[data-theme=dark] .pill.contest-phase.running { color: #ffb340; }
+.pill.contest-phase.ended { background: var(--fill); color: var(--muted); }
+table.results.running td.cell { font-variant-numeric: tabular-nums; }
+.judge-mark { display: block; font-size: 11px; color: var(--muted); }
+.judge-mark.done { color: var(--accent-strong); }
