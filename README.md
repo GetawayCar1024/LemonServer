@@ -1,152 +1,116 @@
-<a href="https://project-lemonlime.github.io/Project_LemonLime/"><img src="assets/icons/lemon-lime.png" align=right /></a>
+# LemonServer
 
-# Project LemonLime (Beta)
+LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project_LemonLime) 的一个 fork：评测核心（`src/base`、`src/core`、导出 `result.html`、统计）和 `.cdf` 比赛格式都**原样沿用 LemonLime**，只是把 Qt Widgets 桌面界面换成了内置 HTTP 服务器、网页前端和 REST API。在任意一台能访问服务器的电脑上，用浏览器就能完成 LemonLime 的全部操作。
 
-为了 OI 比赛而生的基于 Lemon + LemonPlus 的轻量评测系统
+- 基于 LemonLime 0.3.7（上游提交 `69aa223`），上游说明见 [README.LemonLime.md](README.LemonLime.md)。
+- 与 LemonLime 一样以 GPL-3.0-or-later 授权，见 [LICENSE](LICENSE)。
+- 原有的桌面版 `lemon` 仍可照常编译（`-DBUILD_GUI=ON`）。
 
-A tiny judging environment for OI contest based on Lemon + LemonPlus
+## 功能
 
-需要 Qt 6.8 或更高版本。
+| 网页中 | 对应 LemonLime 桌面版 |
+| --- | --- |
+| 比赛列表：新建（只需输入比赛名，自动存放在默认比赛位置）、打开、删除、改名；导入已配置好的比赛（含 .cdf 的文件夹或 zip，可拖拽） | 新建比赛 / 打开比赛 / 修改比赛名 |
+| 试题页：比赛概况树（试题 → 测试点）、试题设置、测试点设置、自动添加试题、批量添加测试点（模式 + 参数）、上移/下移 | SummaryTree、TaskEditWidget、TestCaseEditWidget、AddTestCasesWizard |
+| 测试点管理器：表格内直接编辑分值/时限/内存/依赖/数据路径，多选（Ctrl/Shift），上移下移、拖动排序、合并、拆分、把数据移到其他测试点、批量修改、标出不存在的数据文件、撤销/重做，依赖关系自动跟随调整 | ExtTestCaseModifier |
+| 结果页：成绩表（同样的配色）、评测选中 / 全部 / 未评测 / 按状态重测（NS、CE、TLE、WA…，显示每种状态的数量）、停止评测、侧边栏中的实时评测日志与进度、选手详细结果、查看源程序、删除选手、整理选手文件 | ResultViewer、JudgingDialog、DetailDialog、清理文件 |
+| 导出 result.html / result.htm / CSV（下载，或保存到比赛文件夹） | 导出结果 |
+| 统计页，可导出 statistics.html | StatisticsBrowser |
+| 文件：当前比赛文件夹的文件系统（左侧目录树），上传文件 / 文件夹 / zip 到任意文件夹（可直接拖到目录树中的文件夹上）；单击/Ctrl/Shift 多选、拖动移动（Ctrl 复制）、复制剪切粘贴、移动到…、右键菜单、筛选、排序，以及常用快捷键（按 ? 查看）；在线编辑 100 KiB 以下的文本文件（保留原编码和换行符，显示最后修改时间，被他人修改过时提示冲突）；新建、重命名、删除、下载（文件夹打包 zip） | 打开比赛文件夹 |
+| Testlib for Lemons：在文件系统中右键或 Ctrl+B 在服务器上编译 C/C++ 源文件（内置 testlib.h，Windows 下静态链接），查看编译输出，一键设为某题的校验器；从内置模板（checkers / interactors / validators / generators）新建文件 | 手动编译校验器 |
+| 浅色 / 深色 / 跟随系统 | 深色模式 |
+| 设置：常规设置、编译器（含自动检测）、评测语言与配色 | 选项对话框、添加编译器向导 |
+| 访问令牌（默认 `123456`，可在网页修改）、API Key 管理、默认比赛位置 | —（LemonServer 专有） |
 
-现已支持 Linux，Windows 以及 macOS
+## 编译
 
-[![Linux Static Qt6](https://github.com/Project-LemonLime/Project_LemonLime/actions/workflows/linux-static-qt6.yml/badge.svg)](https://github.com/Project-LemonLime/Project_LemonLime/actions/workflows/linux-static-qt6.yml)
-[![CPack - DEB - Debian](https://github.com/Project-LemonLime/Project_LemonLime/actions/workflows/cpack-deb-debian.yml/badge.svg)](https://github.com/Project-LemonLime/Project_LemonLime/actions/workflows/cpack-deb-debian.yml)
-[![Windows Qt6](https://github.com/Project-LemonLime/Project_LemonLime/actions/workflows/windows-qt6.yml/badge.svg)](https://github.com/Project-LemonLime/Project_LemonLime/actions/workflows/windows-qt6.yml)
-[![MacOS Qt6](https://github.com/Project-LemonLime/Project_LemonLime/actions/workflows/macos-qt6.yml/badge.svg)](https://github.com/Project-LemonLime/Project_LemonLime/actions/workflows/macos-qt6.yml)
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/ea760fd4674f44eaa6ca8273abc0669d)](https://www.codacy.com/gh/Project-LemonLime/Project_LemonLime/dashboard?utm_source=github.com&utm_medium=referral&utm_content=Project-LemonLime/Project_LemonLime&utm_campaign=Badge_Grade)
-
-[![AUR version](https://img.shields.io/aur/version/lemon-lime?style=flat-square)](https://aur.archlinux.org/packages/lemon-lime/)
-[![AUR votes](https://img.shields.io/aur/votes/lemon-lime?label=lemon-lime%20vote&style=flat-square)](https://aur.archlinux.org/packages/lemon-lime/)
-
-[![Packaging status](https://repology.org/badge/vertical-allrepos/lemon-lime.svg)](https://repology.org/metapackage/lemon-lime/versions)
-
-曾在这些系统测试：
-
-|      系统名称       |   版本号   | 架构  |    DE / WM     |
-| :-----------------: | :--------: | :---: | :------------: |
-|       Windows       |     10     | amd64 |    Untitled    |
-|       Windows       |     11     | amd64 |    Untitled    |
-|       Manjaro       |   20.0.1   | amd64 | KDE-Xorg; i3WM |
-|        Arch         | 2021-07-11 | amd64 |    KDE-Xorg    |
-|        Arch         | 2020-10-31 | amd64 |  KDE-Wayland   |
-|       Ubuntu        |   20.04    | amd64 |    GNOME 3     |
-|       Ubuntu        |  18.04.4   | amd64 |    GNOME 3     |
-| NOI Linux 2(Ubuntu) |   20.04    | amd64 |    GNOME 3     |
-|     Linux Mint      |    19.3    | amd64 |    Cinnamon    |
-|       Deepin        |   15.11    | amd64 |      DDE       |
-|       Deepin        | 20 (1000)  | amd64 |      DDE       |
-|       Debian        |   10.3.0   | amd64 | LXQt; KDE-Xorg |
-|       Fedora        |   31-1.9   | amd64 |      XFCE      |
-|      openSUSE       | Leap 15.1  | amd64 |     iceWM      |
-|      openSUSE       | Tumbleweed | amd64 |    KDE-Xorg    |
-|        macOS        | 15.2 Beta  | arm64 |      Aqua      |
-
-如果您在您的系统上做了测试，请前往
-[#49](https://github.com/Project-LemonLime/Project_LemonLime/issues/49)
-告知。
-
-## 特色
-
-以下是一些非常重要的改动：
-
-- **Lemon 绿了！**
-- LemonLime 现在支持 4 种题目类型：传统题、提交答案题、交互题，以及通信题（2 种：一种是选手只完成部分函数，一种是选手要写多个完整程序）。不过交互题和通信题暂时只确保 C++ 的支持。
-- 现在在选手栏中，每个选手的每个题目都可以单独选择，而不是只能一行一行地选。现在你可以方便地重测某道题，还支持一键测试未测试/未找到源文件/编译错误等操作。
-- 原先的 Lemon 的重测制度因为过于耗时而被废弃。现在，你可以自定义最大的重新评测次数。
-- 自带的实数比较模式现在将同时比较绝对误差和相对误差，并且对 `nan` 和 `inf` 做出了判断。
-- 在 Linux 下，默认的栈空间设置为和内存限制相同。
-- 自定义测试被移除。
-
-这里是一些值得称道的新功能：
-
-- 现在你可以给每个测试点设置子任务依赖，而不是像以前把同一个数据加到一个又一个测试点中。
-- 在题目概要栏右键题目，可以进入增强测试点调整器。CCR 的出色功能，现在 LemonLime 也支持了。（这个功能还在测试阶段，小心使用！）
-- 增加统计栏目，对比赛分数数据进行简要的分析。还需要很多的更新。
-- 新增的整理文件功能，可以使所有的选手的子文件夹内外都有答案文件，并且删除大部分无用文件。支持在这之前备份文件。
-- 你也可以对每一个题目，选择是在子文件夹内寻找源文件还是子文件夹外。
-- 多线程评测（实验中）
-
-还有一些令人舒适的小变化：
-
-- 支持高 DPI。
-- 颜色主题：选手名单上的成绩将会有背景颜色，随着分数变化而变化。导出的 HTML 文件也有颜色。默认 2 种主题来自 IOI 和 JOI。主题支持自定义。
-- 各种评测结果在评测时界面、结果查看界面和导出的 HTML 文件有了易于区分的不同的颜色。
-- 支持重新排列题目顺序。在有些时候它很重要。
-- 支持重命名比赛。
-- 手动保存比赛、打开比赛目录（在 `文件` 菜单栏中）。
-- 窗口下方新增提示栏。
-
-以及，一点小细节：
-
-- 如果你在某个点得分了，那么在测试时的窗口会显示获得的分数、使用的时间和空间。
-- 逐行比较模式现在可以显示出错位置的行号了。
-- 减小了导出 HTM 的体积，并且给 HTML 添加了更多跳转。
-- 自动添加试题的时候每个点的分数不再是下取整 (总分 / 数据点个数)。
-- 改动了图标和启动横幅。
-- 无处不在的界面优化。
-
-## 安装
-
-### Windows
-
-可以在 Release 或者 GitHub Actions 处自行取用预构建包。
-
-### macOS
-
-可以在 Release 或者 GitHub Actions 处自行取用预构建包，也可以从 Homebrew Cask 安装。
-
-**对于 Apple Silicon 用户，不保证其使用或评测稳定性**
+需要 Qt ≥ 6.8（Core、Gui、Concurrent、Network、**HttpServer**，以及 LinguistTools）与 CMake ≥ 3.20。克隆后先取子模块（spdlog、SingleApplication、Testlib-for-Lemons）：
 
 ```bash
-brew install lemonlime --cask
+git clone --recursive <仓库地址>      # 或者已克隆后：git submodule update --init
+# 只编译服务器（不需要 Qt Widgets / Svg）
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF
+cmake --build build --target LemonServer
 ```
 
-### Debian && Ubuntu
+CMake 选项：`BUILD_SERVER`（`LemonServer`，默认 ON）、`BUILD_GUI`（LemonLime 桌面版 `lemon`，默认 ON）、`BUILD_LEMON_TESTS`（默认 ON）。
 
-我们提供预编译的 deb 包，但是因为依赖问题有时无法提供，此时可使用[静态链接版本](#静态链接版本)。
+Windows 下可以用 `build-env.ps1` 载入 MSVC 2022 + Qt 环境（默认 Qt 路径 `D:\Qt\6.8.3\msvc2022_64`）：
 
-### Arch Linux
-
-请从 [Arch Linux CN 非官方仓库](https://www.archlinuxcn.org/archlinux-cn-repo-and-mirror/)安装或从 AUR 自行编译。
-
-```
-## 迅速安装 ##
-yay -S lemon-lime # 稳定版本
-yay -S lemon-lime-git # 开发版本（提前使用许多新功能！）
-# 感谢 @CoelacanthusHex 的支持。
+```powershell
+. .\build-env.ps1
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+windeployqt build\LemonServer.exe    # 打包运行所需的 Qt DLL
 ```
 
-注意包含一个名为 `lemon-lime-debug` 的调试信息包，报告崩溃等错误时请务必安装。
+Linux 下与 LemonLime 桌面版一样需要 `bwrap`（bubblewrap），`watcher_unix` 会自动编译并嵌入。
 
-### Nix
+## 运行
 
-已经进入 Nix Unstable 仓库
-
-使用 `nix-env -iA nixpkgs.project-lemonlime` 安装
-
-### 静态链接版本（即无后缀名的单独的可执行文件）
-
-可以在 Release 或者 GitHub Actions 处自行取用。
-
-`chmod +x <filename>` 后直接执行
-
-## 用户手册
-
-我们在软件内提供了离线用户手册。我们同时也提供 [在线用户手册](https://project-lemonlime.github.io/Project_LemonLime/)。
-
-## 构建
-
-请看 [LemonLime 构建指南](BUILD.md)。
-
-## Credit
+打包好的 Windows x64 版本放在仓库根目录的 `LemonServer/` 中（含 Qt 与 MSVC 运行库，不纳入版本库），双击其中的 `start-server.bat` 即可。
 
 ```
-Copyright (c) 2019-2022 Project LemonLime.
-
-Libraries and other files that have been used in LemonLime are listed below:
-
-Copyright (c) 2020 Itay Grudev (@itay-grudev): SingleApplication (MIT)
-
-Copyright (c) 2020 Qv2ray Development Group (@Qv2ray): Design of Translator/Log, Project Structure and CI files (GPLv3)
+LemonServer [--host 0.0.0.0] [--port 8080] [--config <server.json>] [--web-root <dir>]
+            [--use-desktop-settings] [--reset-token]
 ```
+
+启动后用浏览器打开 `http://<服务器IP>:8080/`：
+
+1. 输入访问令牌（默认 `123456`）。
+2. 首次使用需要设置**默认比赛位置**（服务器上的绝对路径），可同时修改令牌。
+3. 新建比赛时只填比赛名，会自动创建 `<默认比赛位置>/<比赛名>/<比赛名>.cdf`、`data/`、`source/`。已有的 LemonLime 比赛文件夹可以直接复制到默认比赛位置下，或在网页中导入；LemonServer 生成的比赛同样可以用 LemonLime 桌面版打开。
+
+- `--config`：服务器配置文件（令牌哈希、API Key、默认比赛位置），默认在 `%LOCALAPPDATA%\LemonServer\server.json`（Linux：`~/.config/LemonServer/server.json`）。
+- 评测设置与编译器默认保存在配置文件旁的 `settings.ini` 中，首次启动会自动检测 PATH 中的 gcc / g++ / fpc / jdk / python。加 `--use-desktop-settings` 则与本机的 LemonLime 桌面版共用设置。
+- `--reset-token`：忘记令牌时把它重置为 `123456`。
+- `--web-root`：从磁盘目录提供网页（开发前端时使用，默认使用编译进程序的 `web/`）。
+
+> 注意：服务器同一时间只打开一个比赛（与 LemonLime 一样，评测核心以比赛文件夹为工作目录）；评测进行中不能切换比赛或修改试题。请务必修改默认令牌，并且只在可信网络中开放端口。
+
+## API
+
+网页本身就完全基于 REST API。认证方式（任选其一）：
+
+- `Authorization: Bearer <API Key>`
+- `X-API-Key: <API Key>`
+- 查询参数 `?access_token=<API Key>`（方便直接下载）
+
+API Key 在网页“设置 → 令牌与 API Key”中创建（可以自动生成，也可以自己指定），可以使用除“修改令牌 / 管理 API Key”之外的所有接口。完整接口列表见网页中的 **API** 页面，常用流程：
+
+```bash
+KEY=lsk_xxx; S=http://server:8080; C=$S/api/contests/NOIP2026
+curl -X POST -H "Authorization: Bearer $KEY" -d '{"name":"NOIP2026"}' $S/api/contests
+curl -X POST -H "Authorization: Bearer $KEY" --data-binary @data.zip   "$C/files/unzip?root=data&stripTop=1"
+curl -X POST -H "Authorization: Bearer $KEY" $C/add-tasks                 # 自动添加 data 下的试题
+curl -X POST -H "Authorization: Bearer $KEY" --data-binary @source.zip "$C/files/unzip?root=source&stripTop=1"
+curl -X POST -H "Authorization: Bearer $KEY" $C/refresh                   # 刷新选手列表
+curl -X POST -H "Authorization: Bearer $KEY" -d '{"mode":"all"}' $C/judge
+curl -H "Authorization: Bearer $KEY" "$C/judge/status?since=0"           # 进度 + 每个测试点的结果事件
+curl -H "Authorization: Bearer $KEY" -o result.html "$C/export?format=html"
+
+# 导入一个配置好的比赛（zip 内含 .cdf、data、source）
+curl -H "Authorization: Bearer $KEY" --data-binary @contest.zip "$S/api/import-contest?name=NOIP2026&overwrite=1"
+# 用 Testlib for Lemons 在服务器上编译 data/aplusb/checker.cpp，并设为第 0 题的 Testlib 校验器
+curl -H "Authorization: Bearer $KEY" -d '{"root":"data","path":"aplusb/checker.cpp"}' $C/files/compile
+curl -X PUT -H "Authorization: Bearer $KEY" -d '{"comparisonMode":5,"specialJudge":"aplusb/checker.exe"}' $C/tasks/0
+```
+
+`tests/server/smoke_test.py` 是一个覆盖主要接口的端到端测试（需要服务器端有 g++）：
+
+```bash
+python tests/server/smoke_test.py http://127.0.0.1:8080 /path/to/empty/contest-root
+```
+
+## 代码结构与对上游的改动
+
+- `src/server/` —— LemonServer 程序：`main.cpp`（启动、日志、翻译）、`contestmanager.*`（相当于 LemonLime 主窗口：打开/保存比赛、调用 `Contest::judge()`、记录评测事件、自动添加试题、整理文件、导入比赛）、`lemonserver.*`（HTTP 路由）、`jsonapi.*`（核心对象 ↔ JSON）、`serverconfig.*`（令牌、API Key、默认比赛位置）、`testlibtools.*`（用 Testlib for Lemons 编译）。
+- `web/` —— 网页前端（原生 JS，无需构建），通过 `web/web.qrc` 编译进程序。
+- `cmake/lemonserver.cmake` —— `LemonServer` 目标。
+- 为了让桌面版和服务器共用代码，对 LemonLime 原有代码只做了少量重构：
+  - `ExportUtil` 拆分为无界面的 `generateHtml()/generateSmallerHtml()/generateCsv()/writeResultFile()`（`exportutil.cpp`）与对话框部分（`exportutil_gui.cpp`）；
+  - 统计 HTML 的生成从 `StatisticsBrowser` 移到 `src/component/statistics/statisticsutil.*`；
+  - `Settings::setSettingsFile()` 允许把设置保存到指定的 INI 文件；
+  - `Contest` 新增 `taskJudgingStartedFor` / `compileFinishedFor` 信号（带选手名），原有信号不变；
+  - `processrunner_win.cpp` 设置错误模式时保留已有标志，避免弹出“找不到 DLL”等对话框；
+  - `contest.cpp` 去掉了未使用的 `<QMessageBox>`，评测核心不再依赖 Qt Widgets。

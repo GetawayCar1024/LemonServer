@@ -69,3 +69,8 @@ build-debug/
 .idea/
 cmake-build-debug/
 .vscode/
+
+# prebuilt LemonServer package (see README)
+/LemonServer/
+# local test output
+__pycache__/

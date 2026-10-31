@@ -1,7 +1,7 @@
 # Packaging
-set(CPACK_PACKAGE_NAME "LemonLime")
+set(CPACK_PACKAGE_NAME "LemonServer")
 set(CPACK_PACKAGE_VENDOR "Project LemonLime Developers")
-set(CPACK_PACKAGE_DESCRIPTION "A tiny judging environment for OI contest based on Lemon + LemonPlus.")
+set(CPACK_PACKAGE_DESCRIPTION "LemonServer: a web judging server for OI contests, forked from LemonLime (Lemon + LemonPlus).")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/Project-LemonLime/Project_LemonLime")
 set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/assets/lemon-lime.ico")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSES")

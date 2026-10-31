@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.20.0)
 
-project(lemon LANGUAGES CXX)
+# LemonServer is a fork of Project LemonLime (https://github.com/Project-LemonLime/Project_LemonLime)
+# that replaces the Qt Widgets desktop UI with a web UI and REST API, keeping LemonLime's judging core.
+project(LemonServer LANGUAGES CXX)
+
+# Version of the LemonServer fork; LEMON_VERSION_STRING (makespec/VERSION) stays the upstream LemonLime version.
+set(LEMONSERVER_VERSION "1.0.0")
 
 ## Add paths to check for cmake modules:
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -29,6 +34,12 @@ option(ENABLE_LTO "Link-Time Optimization" ON)
 LEMONLOG(ENABLE_LTO)
 option(ENABLE_CCACHE "Ccache speed up compile (Only support Makefile and Ninja now)" OFF)
 LEMONLOG(ENABLE_CCACHE)
+option(BUILD_GUI "Build the original LemonLime Qt Widgets desktop application (lemon)" ON)
+LEMONLOG(BUILD_GUI)
+option(BUILD_SERVER "Build the headless web server (LemonServer)" ON)
+LEMONLOG(BUILD_SERVER)
+option(BUILD_LEMON_TESTS "Build the test programs" ON)
+LEMONLOG(BUILD_LEMON_TESTS)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTORCC ON)
@@ -54,16 +65,25 @@ if(NOT Qt_DIR AND DEFINED Qt${LEMON_QT_MAJOR_VERSION}_DIR)
     set(Qt_DIR ${Qt${LEMON_QT_MAJOR_VERSION}_DIR})
 endif()
 
-find_package(Qt${LEMON_QT_MAJOR_VERSION} ${LEMON_QT_MIN_VERSION} COMPONENTS Core Gui Widgets Concurrent REQUIRED)
+find_package(Qt${LEMON_QT_MAJOR_VERSION} ${LEMON_QT_MIN_VERSION} COMPONENTS Core Gui Concurrent REQUIRED)
 
 set(LEMON_QT_LIBNAME Qt${LEMON_QT_MAJOR_VERSION})
 
 add_definitions(-DQT_NO_FOREACH)
 
-list(APPEND LEMON_QT_LIBS ${LEMON_QT_LIBNAME}::Core ${LEMON_QT_LIBNAME}::Gui ${LEMON_QT_LIBNAME}::Widgets ${LEMON_QT_LIBNAME}::Concurrent)
+# Judging core (base/core) only needs QtCore/QtGui; Widgets is used by the desktop UI only.
+list(APPEND LEMON_QT_LIBS ${LEMON_QT_LIBNAME}::Core ${LEMON_QT_LIBNAME}::Gui ${LEMON_QT_LIBNAME}::Concurrent)
+
+if(BUILD_GUI)
+    find_package(Qt${LEMON_QT_MAJOR_VERSION} ${LEMON_QT_MIN_VERSION} COMPONENTS Widgets REQUIRED)
+    set(LEMON_UI_QT_LIBS ${LEMON_QT_LIBS} ${LEMON_QT_LIBNAME}::Widgets)
+    set(LEMON_DEFAULT_QAPPLICATION_CLASS QApplication)
+else()
+    set(LEMON_DEFAULT_QAPPLICATION_CLASS QCoreApplication)
+endif()
 
 set(SINGLEAPPLICATION_DIR ${CMAKE_SOURCE_DIR}/3rdparty/SingleApplication)
-set(QAPPLICATION_CLASS QApplication CACHE STRING "Inheritance class for SingleApplication")
+set(QAPPLICATION_CLASS ${LEMON_DEFAULT_QAPPLICATION_CLASS} CACHE STRING "Inheritance class for SingleApplication")
 add_subdirectory(3rdparty/SingleApplication)
 
 # spdlog 
@@ -156,11 +176,12 @@ add_definitions(-DLEMON_VERSION_BUILD="${BUILD_VERSION}")
 add_definitions(-DLEMON_VERSION_STRING="${VERSION_STRING}")
 
 message(" ")
-message("LemonLime Version: ${VERSION_STRING}")
+message("LemonServer Version: ${LEMONSERVER_VERSION}")
+message("LemonLime (upstream) Version: ${VERSION_STRING}")
 message("LemonLime Build Version: ${BUILD_VERSION}")
 message("LemonLime Build Type: ${CMAKE_BUILD_TYPE}")
 message("|----------------------------------------------------------------|")
-message("| LemonLime,                                                     |")
+message("| LemonServer, a web edition forked from LemonLime,             |")
 message("| A tiny judging environment for OI contest.                     |")
 message("| Based on C++ & Qt.                                             |")
 message("| Licenced under GPLv3                                           |")
@@ -217,8 +238,10 @@ include(cmake/LemonDocs.cmake)
 # Lemon UI
 # ==================================================================================
 
-include(cmake/lemon-ui.cmake)
-    
+if(BUILD_GUI)
+    include(cmake/lemon-ui.cmake)
+endif()
+
 # ==================================================================================
 # Lemon Translations
 # ==================================================================================
@@ -238,80 +261,100 @@ add_custom_target(lupdate
     ${LEMON_CORE_SOURCES}
     ${LEMON_UI_SOURCES}
     ${LEMON_UI_FORMS}
+    ${LEMON_SHARED_COMPONENT_SOURCES}
     ${SINGLEAPPLICATION_SOURCES} -ts ${TRANSLATIONS_TS} -locations none -noobsolete
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 set_target_properties(lupdate PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-
 # ==================================================================================
-# Lemon Build
+# Unix watcher (used by the judging core on Linux / macOS)
 # ==================================================================================
 
-set(QRC_RESOURCES
-    resource.qrc
-    ${LEMON_EMBED_DOC_QRC}
-    )
-
-set(LEMON_FULL_SOURCES
-    ${LEMON_UI_SOURCES}
-    assets/lemon.rc
-    ${LEMON_UI_FORMS}
-    ${LEMON_UI_RESOURCES}
-    ${SINGLEAPPLICATION_SOURCES}
-    ${LEMON_EMBED_TRANSLATION_QRC}
-    ${QRC_RESOURCES}
-    ${QM_FILES}
-    )
-
-
-# Set Apple MacOS Specific settings
-if(APPLE)
-    set(GUI_TYPE MACOSX_BUNDLE)
-endif()
-
-if(WIN32)
-    add_executable(lemon ${GUI_TYPE} ${LEMON_FULL_SOURCES})
-else()
+if(NOT WIN32)
     if(APPLE)
         add_executable(watcher_unix unix/watcher_unix.cpp unix/watcher_macos.mm)
     else()
         add_executable(watcher_unix unix/watcher_unix.cpp unix/watcher_linux.cpp)
     endif()
     configure_file(unix/watcher.qrc ${CMAKE_BINARY_DIR} COPYONLY)
-    list(APPEND LEMON_FULL_SOURCES ${CMAKE_BINARY_DIR}/watcher.qrc)
-    add_executable(lemon ${GUI_TYPE} ${LEMON_FULL_SOURCES})
-    add_dependencies(lemon watcher_unix)
+    set(LEMON_WATCHER_QRC ${CMAKE_BINARY_DIR}/watcher.qrc)
 endif()
-
-target_include_directories(lemon PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 if(WIN32 AND ENABLE_XLS_EXPORT)
     find_package(${LEMON_QT_LIBNAME} COMPONENTS AxContainer REQUIRED)
-    list(APPEND LEMON_QT_LIBS ${LEMON_QT_LIBNAME}::AxContainer)
+    list(APPEND LEMON_UI_QT_LIBS ${LEMON_QT_LIBNAME}::AxContainer)
     add_definitions(-DENABLE_XLS_EXPORT)
 endif()
 
-target_precompile_headers(lemon PUBLIC ${CMAKE_SOURCE_DIR}/src/pch.h)
+# ==================================================================================
+# Lemon Build (desktop GUI)
+# ==================================================================================
 
-target_link_libraries(lemon PRIVATE ${LEMON_QT_LIBS} lemon-core lemon-base SingleApplication::SingleApplication spdlog::spdlog)
+if(BUILD_GUI)
+    set(QRC_RESOURCES
+        resource.qrc
+        ${LEMON_EMBED_DOC_QRC}
+        )
 
-# Linking this static Qt plugin also imports its generated registration object.
-find_package(${LEMON_QT_LIBNAME} COMPONENTS Svg REQUIRED)
-qt_add_plugin(lemon-svg-icon STATIC
-    PLUGIN_TYPE iconengines
-    CLASS_NAME LemonSvgIconPlugin
-    src/plugins/lemonsvgiconplugin.cpp
-    src/plugins/lemonsvgiconplugin.json
-    )
-target_link_libraries(lemon-svg-icon PRIVATE ${LEMON_QT_LIBNAME}::Gui ${LEMON_QT_LIBNAME}::Svg)
-target_link_libraries(lemon PRIVATE lemon-svg-icon)
+    set(LEMON_FULL_SOURCES
+        ${LEMON_UI_SOURCES}
+        assets/lemon.rc
+        ${LEMON_UI_FORMS}
+        ${LEMON_UI_RESOURCES}
+        ${SINGLEAPPLICATION_SOURCES}
+        ${LEMON_EMBED_TRANSLATION_QRC}
+        ${LEMON_WATCHER_QRC}
+        ${QRC_RESOURCES}
+        ${QM_FILES}
+        )
+
+    # Set Apple MacOS Specific settings
+    if(APPLE)
+        set(GUI_TYPE MACOSX_BUNDLE)
+    endif()
+
+    add_executable(lemon ${GUI_TYPE} ${LEMON_FULL_SOURCES})
+    if(NOT WIN32)
+        add_dependencies(lemon watcher_unix)
+    endif()
+
+    target_include_directories(lemon PUBLIC ${CMAKE_SOURCE_DIR}/src)
+
+    target_precompile_headers(lemon PUBLIC ${CMAKE_SOURCE_DIR}/src/pch.h)
+
+    target_link_libraries(lemon PRIVATE ${LEMON_UI_QT_LIBS} lemon-core lemon-base SingleApplication::SingleApplication spdlog::spdlog)
+
+    # Linking this static Qt plugin also imports its generated registration object.
+    find_package(${LEMON_QT_LIBNAME} COMPONENTS Svg REQUIRED)
+    qt_add_plugin(lemon-svg-icon STATIC
+        PLUGIN_TYPE iconengines
+        CLASS_NAME LemonSvgIconPlugin
+        src/plugins/lemonsvgiconplugin.cpp
+        src/plugins/lemonsvgiconplugin.json
+        )
+    target_link_libraries(lemon-svg-icon PRIVATE ${LEMON_QT_LIBNAME}::Gui ${LEMON_QT_LIBNAME}::Svg)
+    target_link_libraries(lemon PRIVATE lemon-svg-icon)
+endif()
+
+# ==================================================================================
+# Lemon Server (headless judge + web UI)
+# ==================================================================================
+
+if(BUILD_SERVER)
+    include(cmake/lemonserver.cmake)
+endif()
 
 if(ENABLE_LTO)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT LTO_SUPPORTED OUTPUT error)
 
     if(LTO_SUPPORTED)
-        set_property(TARGET lemon lemon-base lemon-core PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        set_property(TARGET lemon-base lemon-core PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        foreach(LEMON_APP_TARGET lemon LemonServer)
+            if(TARGET ${LEMON_APP_TARGET})
+                set_property(TARGET ${LEMON_APP_TARGET} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+            endif()
+        endforeach()
     else()
         message(STATUS "IPO / LTO not supported, disabled")
     endif()
@@ -321,19 +364,23 @@ endif()
 # Tests
 # ==================================================================================
 
-enable_testing()
-add_subdirectory(tests)
+if(BUILD_LEMON_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # ==================================================================================
 # Platform-dependent installation process and deployment
 # ==================================================================================
 
-if(APPLE)
-    include(cmake/platforms/macos.cmake)
-elseif(UNIX AND NOT APPLE AND NOT WIN32)
-    include(cmake/platforms/linux.cmake)
-elseif(WIN32)
-    include(cmake/platforms/windows.cmake)
+if(BUILD_GUI)
+    if(APPLE)
+        include(cmake/platforms/macos.cmake)
+    elseif(UNIX AND NOT APPLE AND NOT WIN32)
+        include(cmake/platforms/linux.cmake)
+    elseif(WIN32)
+        include(cmake/platforms/windows.cmake)
+    endif()
 endif()
 
 # ==================================================================================
