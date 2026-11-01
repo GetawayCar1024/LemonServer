@@ -243,6 +243,13 @@ namespace {
 					if (content.isEmpty() && fi.size > 0)
 						content = zip.fileData(QString::fromLocal8Bit(fi.filePath.toUtf8()));
 					f.write(content);
+					f.close();
+#ifndef Q_OS_WIN
+					// keep executables (e.g. compiled checkers) executable
+					constexpr auto exe = QFile::ExeOwner | QFile::ExeUser | QFile::ExeGroup | QFile::ExeOther;
+					if (fi.permissions & exe)
+						f.setPermissions(f.permissions() | (fi.permissions & exe));
+#endif
 					(*files)++;
 				}
 			}
@@ -1691,8 +1698,10 @@ void LemonServer::setupFileRoutes() {
 				             while (it.hasNext()) {
 					             it.next();
 					             QFile f(it.filePath());
-					             if (f.open(QFile::ReadOnly))
-						             zip.addFile(dir.relativeFilePath(it.filePath()), f.readAll());
+					             if (! f.open(QFile::ReadOnly))
+						             continue;
+					             zip.setCreationPermissions(f.permissions()); // e.g. executable checkers
+					             zip.addFile(dir.relativeFilePath(it.filePath()), f.readAll());
 				             }
 				             zip.close();
 			             }

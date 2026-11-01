@@ -1092,6 +1092,20 @@ void ContestManager::startNext() {
 			if (list.isEmpty() && error.isEmpty())
 				error = tr("Nothing to judge");
 		}
+#ifndef Q_OS_WIN
+		// A checker uploaded without its executable bit (single file upload, zip made on Windows) cannot run.
+		if (c && ! list.isEmpty()) {
+			for (const auto *t : c->getTaskList()) {
+				if (t->getComparisonMode() != Task::LemonSpecialJudgeMode &&
+				    t->getComparisonMode() != Task::TestlibSpecialJudgeMode)
+					continue;
+				QFile checker(c->dataPath() + t->getSpecialJudge());
+				if (checker.exists() && ! (checker.permissions() & QFile::ExeOwner))
+					checker.setPermissions(checker.permissions() | QFile::ExeOwner | QFile::ExeUser |
+					                       QFile::ExeGroup | QFile::ExeOther);
+			}
+		}
+#endif
 		if (list.isEmpty()) {
 			LOG("Skipped judging job", job.id, "of", job.contest, ":", error);
 			pushEvent({{"type", "skipped"}, {"job", double(job.id)}, {"contest", job.contest}, {"error", error}});
