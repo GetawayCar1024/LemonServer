@@ -496,6 +496,7 @@ async function renderContestList() {
       h('div', { class: 'muted small-text' }, [c.title && c.title !== c.name ? c.name : null, `${c.tasks ?? '-'} 题`, `${c.contestants ?? '-'} 名选手`,
         c.startTime != null ? `${fmtDate(c.startTime)} – ${fmtDate(c.endTime)}` : c.modified].filter(Boolean).join(' · '))),
     h('button', { class: 'primary', onclick: () => go('#/contest/' + enc(c.name) + '/tasks') }, '打开'),
+    h('button', { onclick: () => cloneContestDlg(c) }, '克隆'),
     h('button', {
       class: 'danger', onclick: async () => {
         if (!await confirmDlg(`删除比赛“${c.name}”及其全部数据和选手程序？此操作无法恢复。`, '删除')) return;
@@ -528,6 +529,31 @@ async function renderContestList() {
       data.contests.length ? items : h('div', { class: 'empty' }, '暂无比赛')))));
   name.focus();
   checkJudgeStatus();
+}
+
+// Copy a contest: tasks and data; optionally also the contestants' programs and results.
+function cloneContestDlg(c) {
+  const name = h('input', { type: 'text', value: c.name + ' 副本', style: { width: '320px' } });
+  const subs = h('input', { type: 'checkbox' });
+  const submit = async () => {
+    const n = name.value.trim();
+    if (!n) { name.focus(); return false; }
+    await api('POST', cpath(c.name) + '/clone', { name: n, withSubmissions: subs.checked });
+    toast('已克隆为 ' + n);
+    go('#/contest/' + enc(n) + '/tasks');
+  };
+  const dlg = modal({
+    title: `克隆“${c.title || c.name}”`,
+    body: h('div', { class: 'form-grid', style: { gridTemplateColumns: '80px 1fr' } },
+      field('新比赛名', name),
+      h('span'), h('label', { class: 'inline' }, subs, '同时复制选手程序和成绩')),
+    buttons: [{ label: '取消' }, { label: '克隆', primary: true, onClick: submit }],
+  });
+  name.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    try { if (await submit() !== false) dlg.close(true); } catch (err) { fail(err); }
+  });
+  setTimeout(() => name.select(), 40);
 }
 
 function pickContestUpload(attrs, cb) {
@@ -2912,6 +2938,7 @@ function renderApiDoc() {
     ['GET · PUT · DELETE ' + C, '打开（试题与成绩）/ 修改 {"title"?,"startTime"?,"endTime"?,"downZip"?} / 删除'],
     ['比赛时间', 'startTime、endTime 为毫秒时间戳或 ISO 8601，null 表示不设置；比赛中（running）不返回成绩，详细结果、源程序、导出、统计、source 下的文件返回 403'],
     ['GET · PUT · DELETE ' + C + '/down-zip', '下载 / 上传（请求体为 zip，保存为 down.zip）/ 清除（&deleteFile=1 同时删除文件）；PUT ' + C + ' {"downZip":"路径"} 指定已有文件'],
+    ['POST ' + C + '/clone', '{"name","title"?,"withSubmissions"?:false} 克隆比赛（不复制比赛时间）'],
     ['POST /api/import-contest?name=&overwrite=1', '请求体为比赛 zip（含 .cdf，可带一层顶层文件夹），导入为新比赛'],
     ['PUT /api/import-contest/file?id=&path=', '逐个上传比赛文件（id 自定，4–64 位字母数字）'],
     ['POST /api/import-contest/finish?id=&name=&overwrite=1', '完成逐个上传的导入；DELETE /api/import-contest?id= 放弃'],

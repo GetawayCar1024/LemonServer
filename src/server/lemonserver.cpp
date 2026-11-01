@@ -1097,6 +1097,26 @@ void LemonServer::setupContestRoutes() {
 		return jsonResponse(contestJson(manager->current()), Status::Created);
 	});
 
+	// Clone a contest: {"name", "title"?, "withSubmissions"?: false}
+	server.route("/api/contests/<arg>/clone", Method::Post,
+	             [this](const QString &name, const QHttpServerRequest &req) {
+		             if (auto r = denied(req))
+			             return std::move(*r);
+		             bool ok = false;
+		             const auto body = parseBody(req, &ok);
+		             if (! ok)
+			             return errorResponse(Status::BadRequest, "invalid JSON");
+		             const QString to = body["name"].toString().trimmed();
+		             QString error;
+		             if (! manager->cloneContest(name, to, body["title"].toString().trimmed(),
+		                                         body["withSubmissions"].toBool(), &error))
+			             return errorResponse(manager->isBusy(name) ? Status::Conflict : Status::BadRequest, error);
+		             Contest *c = nullptr;
+		             if (auto r = withContest(to, &c))
+			             return std::move(*r);
+		             return jsonResponse(contestJson(c), Status::Created);
+	             });
+
 	server.route("/api/contests/<arg>", Method::Get, [this](const QString &name, const QHttpServerRequest &req) {
 		if (auto r = denied(req))
 			return std::move(*r);

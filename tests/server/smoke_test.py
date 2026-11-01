@@ -368,4 +368,36 @@ assert fin and fin[-1]["stopped"], st["events"][-3:]
 call("POST", c + "/judge/stop", token=key, expect=409)
 call("PUT", "/api/settings", {}, key, expect=200)
 print("judging queue OK")
+
+# clone a contest: tasks and data; submissions and results only when asked; never the contest time
+_, src = call("GET", c, token=key, expect=200)
+_, r = call("POST", c + "/clone", {"name": "克隆测试"}, key, expect=201)
+assert r["name"] == "克隆测试" and r["title"] == "克隆测试", r
+assert len(r["tasks"]) == len(src["tasks"]) and r["tasks"][0]["testCases"] == src["tasks"][0]["testCases"], r["tasks"]
+assert r["contestants"] == [] and r["startTime"] is None and src["startTime"] is not None, r
+K1 = "/api/contests/" + urllib.parse.quote("克隆测试")
+call("GET", K1 + "/files/download" + q(root="data", path="aplusb/1.in"), token=key, expect=200)
+_, ls = call("GET", K1 + "/files" + q(root="contest", path=""), token=key, expect=200)
+names = {e["name"] for e in ls["entries"]}
+assert {"data", "source", "克隆测试.cdf"} <= names and "result.html" not in names and CONTEST + ".cdf" not in names, names
+assert call("GET", K1 + "/files" + q(root="source", path=""), token=key)[1]["entries"] == []
+_, r = call("POST", c + "/clone", {"name": "克隆测试2", "title": "带成绩", "withSubmissions": True}, key, expect=201)
+assert r["title"] == "带成绩" and len(r["contestants"]) == len(src["contestants"]), r
+assert {x["name"]: x["totalScore"] for x in r["contestants"]} == {x["name"]: x["totalScore"] for x in src["contestants"]}
+K2 = "/api/contests/" + urllib.parse.quote("克隆测试2")
+call("POST", K2 + "/judge", {"mode": "selected", "items": [{"contestant": "ac"}, {"contestant": "wa"}]}, key, expect=202)
+wait_idle()
+sc = {x["name"]: x["totalScore"] for x in call("GET", K2, token=key)[1]["contestants"]}
+assert sc["ac"] == 100 and sc["wa"] == 75, sc  # the copied checker still runs
+call("POST", c + "/clone", {"name": "克隆测试"}, key, expect=400)
+call("POST", c + "/clone", {"name": "a/b"}, key, expect=400)
+call("POST", "/api/contests/nothing/clone", {"name": "x"}, key, expect=400)
+call("POST", c + "/judge", {"mode": "all"}, key, expect=202)
+call("POST", c + "/clone", {"name": "克隆测试3", "withSubmissions": True}, key, expect=409)  # results not final
+call("POST", c + "/clone", {"name": "克隆测试3"}, key, expect=201)
+call("DELETE", c + "/judge", token=key, expect=200)
+wait_idle()
+for n in ("克隆测试", "克隆测试2", "克隆测试3"):
+    call("DELETE", "/api/contests/" + urllib.parse.quote(n), token=key, expect=200)
+print("clone OK")
 print("ALL OK")

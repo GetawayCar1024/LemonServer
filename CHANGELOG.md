@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.4
+
+**下载**
+
+- Windows x64：`LemonServer-0.1.4-windows-x64.zip`，解压后双击 `start-server.bat`。
+- Ubuntu 22.04 / 24.04 / 26.04 x64：`sudo apt install ./lemonserver_0.1.4_ubuntu_amd64.deb`，然后运行 `lemonserver --port 8080`。
+
+**新功能**
+
+- 克隆比赛：比赛列表中点“克隆”，输入新比赛名。默认复制试题、数据和比赛文件夹中的其他文件，不复制选手程序、成绩和导出的结果；可勾选“同时复制选手程序和成绩”。比赛时间不会被复制，down.zip 保留。API：`POST /api/contests/{name}/clone`。
+
 ## 0.1.3
 
 **下载**

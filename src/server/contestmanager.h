@@ -42,6 +42,10 @@ class ContestManager : public QObject {
 	QJsonArray listContests() const;
 	bool createContest(const QString &name, const QString &title, QString *error);
 	bool deleteContest(const QString &name, QString *error);
+	// Copy a contest (tasks, data and the other files of its folder) to a new one. Without submissions,
+	// source/, the results and exported result files are left out. The contest time is not copied.
+	bool cloneContest(const QString &from, const QString &to, const QString &title, bool withSubmissions,
+	                  QString *error);
 	// Folder where an uploaded contest is assembled before it is imported.
 	QString importStagingDir(const QString &name) const;
 	// Turn the staging folder (containing a .cdf, possibly inside one top-level folder) into a contest.

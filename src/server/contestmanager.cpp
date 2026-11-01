@@ -75,6 +75,17 @@ namespace {
 			files.insert(i.completeBaseName(), i.fileName());
 	}
 
+	bool copyTree(const QString &from, const QString &to) {
+		if (! QFileInfo(from).isDir())
+			return QFile::copy(from, to); // keeps the permissions (executable checkers)
+		if (! QDir().mkpath(to))
+			return false;
+		for (const auto &fi : QDir(from).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden))
+			if (! copyTree(fi.absoluteFilePath(), QDir(to).filePath(fi.fileName())))
+				return false;
+		return true;
+	}
+
 	QDateTime readTime(const QJsonObject &obj, const char *key) {
 		return QDateTime::fromString(obj[key].toString(), Qt::ISODateWithMs);
 	}
@@ -212,6 +223,86 @@ bool ContestManager::deleteContest(const QString &name, QString *error) {
 		*error = tr("Cannot remove contest folder");
 		return false;
 	}
+	return true;
+}
+
+bool ContestManager::cloneContest(const QString &from, const QString &to, const QString &title,
+                                  bool withSubmissions, QString *error) {
+	if (config->contestRoot().isEmpty()) {
+		*error = tr("Default contest folder is not configured");
+		return false;
+	}
+	if (! isValidContestName(from) || findCdf(contestDir(from)).isEmpty()) {
+		*error = tr("Contest not found");
+		return false;
+	}
+	if (! isValidContestName(to)) {
+		*error = tr("Invalid contest name");
+		return false;
+	}
+	const QString dstDir = contestDir(to);
+	if (QFileInfo::exists(dstDir)) {
+		*error = tr("Contest %1 already exists").arg(to);
+		return false;
+	}
+	if (withSubmissions && isBusy(from)) {
+		// its results are not final yet
+		*error = tr("This contest is being judged or waiting to be judged");
+		return false;
+	}
+	// the contest as LemonLime would save it now (this also converts the old binary .cdf format)
+	if (! loaded.contains(from)) {
+		const QString cdf = findCdf(contestDir(from));
+		Contest *c = loadContest(cdf, error);
+		if (! c)
+			return false;
+		addLoaded(from, c, QFileInfo(cdf).fileName());
+	}
+	const Loaded &src = loaded[from];
+	QJsonObject cdf;
+	src.contest->writeToJson(cdf);
+	cdf["contestTitle"] = title.isEmpty() ? to : title;
+	if (! withSubmissions)
+		cdf["contestants"] = QJsonArray();
+
+	static const QStringList resultFiles{"result.html", "result.htm", "result.csv", "statistics.html"};
+	const QDir srcDir(contestDir(from));
+	const QDir dst(dstDir);
+	auto fail = [&](const QString &message) {
+		QDir(dstDir).removeRecursively();
+		*error = message;
+		return false;
+	};
+	if (! QDir().mkpath(dstDir))
+		return fail(tr("Cannot make contest path"));
+	for (const auto &fi : srcDir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden)) {
+		const QString n = fi.fileName();
+		if (n == src.cdfFile || n == kPropertiesFile)
+			continue; // written below
+		if (! withSubmissions &&
+		    (n == "source" || n.startsWith("source_bak_") || resultFiles.contains(n, Qt::CaseInsensitive)))
+			continue;
+		if (! copyTree(fi.absoluteFilePath(), dst.filePath(n)))
+			return fail(tr("Cannot copy %1").arg(n));
+	}
+	dst.mkdir("data");
+	dst.mkdir("source");
+	QSaveFile out(dst.filePath(to + ".cdf"));
+	if (! out.open(QFile::WriteOnly))
+		return fail(tr("Cannot write file %1").arg(to + ".cdf"));
+	out.write(QJsonDocument(cdf).toJson(QJsonDocument::Compact));
+	if (! out.commit())
+		return fail(tr("Cannot write file %1").arg(to + ".cdf"));
+	// LemonServer's properties: keep down.zip (if it was copied), not the contest time
+	const QString down = src.properties["downZip"].toString();
+	if (! down.isEmpty() && QFileInfo(dst.filePath(down)).isFile()) {
+		QSaveFile props(dst.filePath(kPropertiesFile));
+		if (props.open(QFile::WriteOnly)) {
+			props.write(QJsonDocument(QJsonObject{{"downZip", down}}).toJson(QJsonDocument::Indented));
+			props.commit();
+		}
+	}
+	LOG("Cloned contest", from, "to", to, withSubmissions ? "with submissions" : "without submissions");
 	return true;
 }
 
