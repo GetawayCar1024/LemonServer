@@ -16,7 +16,7 @@ LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project
 | 比赛列表：新建（只需输入比赛名，自动存放在默认比赛位置）、打开、删除、改名；导入已配置好的比赛（含 .cdf 的文件夹或 zip，可拖拽） | 新建比赛 / 打开比赛 / 修改比赛名 |
 | 试题页：比赛概况树（试题 → 测试点）、试题设置、测试点设置、自动添加试题、批量添加测试点（模式 + 参数）、上移/下移 | SummaryTree、TaskEditWidget、TestCaseEditWidget、AddTestCasesWizard |
 | 测试点管理器：表格内直接编辑分值/时限/内存/依赖/数据路径，多选（Ctrl/Shift），上移下移、拖动排序、合并、拆分、把数据移到其他测试点、批量修改、标出不存在的数据文件、撤销/重做，依赖关系自动跟随调整 | ExtTestCaseModifier |
-| 结果页：成绩表（同样的配色）、评测选中 / 全部 / 未评测 / 按状态重测（NS、CE、TLE、WA…，显示每种状态的数量）、停止评测、侧边栏中的实时评测日志与进度、选手详细结果、查看源程序、删除选手、整理选手文件 | ResultViewer、JudgingDialog、DetailDialog、清理文件 |
+| 结果页：成绩表（同样的配色）、评测选中 / 全部 / 未评测 / 按状态重测（NS、CE、TLE、WA…，显示每种状态的数量）、停止评测、侧边栏中的实时评测日志与进度、全局评测队列（所有比赛依次评测，评测期间可编辑其他比赛，正在评测或排队的比赛不能修改，可“全部出队”）、选手详细结果、查看源程序、删除选手、整理选手文件 | ResultViewer、JudgingDialog、DetailDialog、清理文件 |
 | 导出 result.html / result.htm / CSV（下载，或保存到比赛文件夹） | 导出结果 |
 | 统计页，可导出 statistics.html | StatisticsBrowser |
 | 文件：当前比赛文件夹的文件系统（左侧目录树），上传文件 / 文件夹 / zip 到任意文件夹（可直接拖到目录树中的文件夹上）；单击/Ctrl/Shift 多选、拖动移动（Ctrl 复制）、复制剪切粘贴、移动到…、右键菜单、筛选、排序，以及常用快捷键（按 ? 查看）；在线编辑 100 KiB 以下的文本文件（保留原编码和换行符，显示最后修改时间，被他人修改过时提示冲突）；新建、重命名、删除、下载（文件夹打包 zip） | 打开比赛文件夹 |

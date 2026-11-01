@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.3
+
+**下载**
+
+- Windows x64：`LemonServer-0.1.3-windows-x64.zip`，解压后双击 `start-server.bat`。
+- Ubuntu 22.04 / 24.04 / 26.04 x64：`sudo apt install ./lemonserver_0.1.3_ubuntu_amd64.deb`，然后运行 `lemonserver --port 8080`。
+
+**新功能**
+
+- 评测队列：所有比赛的评测请求进入同一个队列，依次评测（每次评测内部仍按“评测线程”并行）。评测进行中提交的请求会排队，不再报错；相同的请求不会重复排队。
+- 评测期间可以打开和编辑其他比赛。正在评测或排队的比赛可以查看、可以继续提交评测，但不能修改；点“全部出队”可移出它的全部任务（正在评测的会停止）。评测设置、编译器和默认比赛位置仍需评测结束后修改。
+- 评测面板显示正在评测的比赛和排队列表，可移出单个任务；比赛列表显示“评测中 / 排队中”。
+- API：`POST /api/contests/{name}/judge` 改为加入队列并返回任务；新增 `DELETE /api/contests/{name}/judge`、`GET /api/judge-queue`、`DELETE /api/judge-queue/{id}`、`GET /api/judge/status`。
+
+**修复**
+
+- Linux：从 zip 导入或上传的比赛中，编译好的校验器会丢失可执行权限，导致整场评测出错。现在打包和解压 zip 时保留可执行权限，评测前也会自动补上。
+
 ## 0.1.2
 
 **下载**
