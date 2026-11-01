@@ -341,21 +341,16 @@ QJsonObject LemonServer::judgeStatusJson(qint64 since) const {
 	auto status = manager->judgeStatus(since);
 	const QString judged = status["contest"].toString();
 	if (! judged.isEmpty() && manager->isContestRunning(judged)) {
-		// keep the progress (which submission is being judged), drop the results
+		// During the contest only the overall progress of the job is shown: no results, and not which
+		// submissions are being judged either (only the start / end of the job).
+		static const QSet<QString> kept{"start", "finished", "stopping", "skipped"};
 		QJsonArray events;
-		for (const auto &v : status["events"].toArray()) {
-			auto e = v.toObject();
-			const QString type = e["type"].toString();
-			if (type == "dependence")
-				continue;
-			if (type == "case")
-				for (const char *key : {"result", "score", "timeUsed", "memoryUsed"})
-					e.remove(key);
-			if (type == "compile")
-				e.remove("state");
-			events.append(e);
-		}
+		for (const auto &v : status["events"].toArray())
+			if (kept.contains(v.toObject()["type"].toString()))
+				events.append(v);
 		status["events"] = events;
+		status.remove("tasksDone");
+		status.remove("tasksTotal");
 		status["contestRunning"] = true;
 	}
 	return status;
@@ -452,6 +447,8 @@ QStringList LemonServer::submissionFiles(Contest *contest, Contestant *ct, int i
 
 QJsonObject LemonServer::contestantJson(Contest *contest, Contestant *ct) const {
 	const bool hide = manager->isContestRunning();
+	// while it is also being judged, not even which submissions are judged already
+	const bool hideJudged = hide && manager->judgingContest() == manager->currentName();
 	auto obj = contestantSummary(contest, ct);
 	QJsonArray tasks = obj["tasks"].toArray();
 	for (int i = 0; i < tasks.size(); i++) {
@@ -466,6 +463,8 @@ QJsonObject LemonServer::contestantJson(Contest *contest, Contestant *ct) const 
 			t.remove("score");
 			t.remove("compileState");
 		}
+		if (hideJudged)
+			t.remove("judged");
 		tasks[i] = t;
 	}
 	obj["tasks"] = tasks;
@@ -473,6 +472,8 @@ QJsonObject LemonServer::contestantJson(Contest *contest, Contestant *ct) const 
 		obj.remove("totalScore");
 		obj.remove("totalUsedTime");
 	}
+	if (hideJudged)
+		obj.remove("judgingTime");
 	return obj;
 }
 
@@ -1583,7 +1584,15 @@ void LemonServer::setupContestRoutes() {
 	server.route("/api/judge-queue", Method::Get, [this](const QHttpServerRequest &req) {
 		if (auto r = denied(req))
 			return std::move(*r);
-		return jsonResponse(manager->queueJson());
+		auto queue = manager->queueJson();
+		auto running = queue["running"].toObject();
+		if (! running.isEmpty() && manager->isContestRunning(running["contest"].toString())) {
+			// during the contest only the overall progress (see judgeStatusJson)
+			running.remove("tasksDone");
+			running.remove("tasksTotal");
+			queue["running"] = running;
+		}
+		return jsonResponse(queue);
 	});
 	server.route("/api/judge-queue/<arg>", Method::Delete, [this](qint64 id, const QHttpServerRequest &req) {
 		if (auto r = denied(req))

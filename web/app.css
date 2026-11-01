@@ -341,3 +341,10 @@ table.results.running td.cell { font-variant-numeric: tabular-nums; }
 .jq-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 2px 0; }
 .jq-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jq-item .x { background: var(--fill); border-radius: 50%; width: 20px; height: 20px; padding: 0; justify-content: center; font-size: 11px; color: var(--muted); }
+
+/* results table: selecting cells must not select their text */
+table.results { user-select: none; -webkit-user-select: none; }
+/* overall judging progress at the bottom of the judging panel */
+.judge-panel .jp-progress { padding: 10px 14px 4px; border-bottom: none; border-top: 1px solid var(--sep); }
+.judge-panel .jp-progress-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+.judge-panel .jp-foot { border-top: none; }

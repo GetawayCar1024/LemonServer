@@ -1561,6 +1561,63 @@ function computeRanks(contestants) {
   return rank;
 }
 
+// Selection in the results table, like in a spreadsheet: a click selects one cell, Ctrl/⌘-click adds or
+// removes one, Shift-click selects the rectangle from the last clicked cell, dragging selects a rectangle
+// (Ctrl/⌘ + drag adds it). The name column stands for the whole row. Returns bind(td, row, col).
+function resultGridSelection(list, onChange) {
+  const cells = new Map(); // key -> td
+  const keyOf = (r, col) => list[r].name + '|' + (col < 0 ? '*' : col);
+  const posOf = (key) => {
+    const i = key.lastIndexOf('|');
+    const r = list.findIndex((x) => x.name === key.slice(0, i));
+    return r < 0 ? null : { r, col: key.slice(i + 1) === '*' ? -1 : +key.slice(i + 1) };
+  };
+  const rect = (a, b) => {
+    const keys = [];
+    for (let r = Math.min(a.r, b.r); r <= Math.max(a.r, b.r); r++) {
+      if (a.col < 0 || b.col < 0) keys.push(keyOf(r, -1));
+      else for (let col = Math.min(a.col, b.col); col <= Math.max(a.col, b.col); col++) keys.push(keyOf(r, col));
+    }
+    return keys;
+  };
+  const select = (base, keys) => {
+    S.resultSel = new Set(base);
+    for (const k of keys) S.resultSel.add(k);
+    for (const [k, td] of cells) td.classList.toggle('selected', S.resultSel.has(k));
+    onChange();
+  };
+  return (td, r, col) => {
+    const key = keyOf(r, col);
+    cells.set(key, td);
+    td.classList.toggle('selected', S.resultSel.has(key));
+    td.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); // no text selection
+      window.getSelection()?.removeAllRanges();
+      const add = e.ctrlKey || e.metaKey;
+      const anchor = S.resultAnchor && posOf(S.resultAnchor);
+      const before = new Set(add ? S.resultSel : []);
+      if (e.shiftKey && anchor) {
+        select(before, rect(anchor, { r, col })); // the anchor stays where it was
+        S.resultDrag = { start: anchor, base: before, rect, select };
+        return;
+      }
+      S.resultAnchor = key;
+      if (add && before.has(key)) {
+        before.delete(key);
+        select(before, []);
+      } else select(before, [key]);
+      S.resultDrag = { start: { r, col }, base: add ? new Set(S.resultSel) : before, rect, select };
+    });
+    td.addEventListener('mouseenter', (e) => {
+      const d = S.resultDrag;
+      if (!d || !(e.buttons & 1)) return;
+      d.select(d.base, d.rect(d.start, { r, col }));
+    });
+  };
+}
+window.addEventListener('mouseup', () => { S.resultDrag = null; });
+
 function renderResultsTab(page) {
   const c = S.contest;
   const judging = c.busy; // being judged or queued: no editing (judging can still be queued)
@@ -1612,36 +1669,33 @@ function renderResultsTab(page) {
   const rank = computeRanks(c.contestants);
   const list = c.contestants.slice().sort((a, b) => ((rank[a.name] ?? 1e9) - (rank[b.name] ?? 1e9)) || (a.name < b.name ? -1 : 1));
   const nf = hslOf(theme().nf), ce = hslOf(theme().ce);
-  const toggle = (key, el) => {
-    if (S.resultSel.has(key)) { S.resultSel.delete(key); el.classList.remove('selected'); } else { S.resultSel.add(key); el.classList.add('selected'); }
+  const bind = resultGridSelection(list, () => {
     selBtn.disabled = !S.resultSel.size;
     delBtn.disabled = judging || !S.resultSel.size;
-  };
+  });
   const table = h('table', { class: 'grid results' },
     h('tr', null, h('th', null, '排名'), h('th', null, '选手'), h('th', null, '总分'),
       c.tasks.map((t) => h('th', null, t.problemTitle, h('span', { class: 'muted', style: { fontWeight: 400, marginLeft: '4px' } }, t.totalScore))),
       h('th', null, '用时 (s)'), h('th', null, '评测时间')),
-    list.map((ct) => {
-      const nameKey = ct.name + '|*';
-      const nameCell = h('td', { class: 'name' + (S.resultSel.has(nameKey) ? ' selected' : ''), title: '双击查看详情' }, ct.name);
-      nameCell.addEventListener('click', () => toggle(nameKey, nameCell));
+    list.map((ct, row) => {
+      const nameCell = h('td', { class: 'name', title: '双击查看详情' }, ct.name);
+      bind(nameCell, row, -1);
       nameCell.addEventListener('dblclick', () => showDetail(ct.name));
       return h('tr', null,
         h('td', null, rank[ct.name] !== undefined ? rank[ct.name] + 1 : '—'),
         nameCell,
         h('td', { class: 'total', style: { background: ct.totalScore >= 0 ? colorGrand(ct.totalScore, c.totalScore) : '' } }, ct.totalScore >= 0 ? ct.totalScore : '—'),
         ct.tasks.map((r, j) => {
-          const key = ct.name + '|' + j;
           let bg = '';
           if (r.score !== -1) {
             if (c.tasks[j].taskType !== 1 && r.compileState !== 0) bg = r.compileState === 1 ? nf : ce;
             else bg = colorPer(r.score, c.tasks[j].totalScore);
           }
           const td = h('td', {
-            class: 'cell' + (S.resultSel.has(key) ? ' selected' : ''), style: { background: bg },
+            class: 'cell', style: { background: bg },
             title: r.score === -1 ? '未评测' : (c.tasks[j].taskType !== 1 && r.compileState !== 0 ? COMPILE_STATE[r.compileState] : (r.sourceFile || '')),
           }, r.score !== -1 ? r.score : '—', r.score !== -1 && c.tasks[j].taskType !== 1 && r.compileState !== 0 ? h('span', { class: 'small-text', style: { opacity: 0.75, marginLeft: '5px' } }, COMPILE_ABBR[r.compileState]) : null);
-          td.addEventListener('click', () => toggle(key, td));
+          bind(td, row, j);
           td.addEventListener('dblclick', () => showDetail(ct.name, j));
           return td;
         }),
@@ -1652,7 +1706,7 @@ function renderResultsTab(page) {
     h('div', { class: 'legend' },
       h('span', null, h('i', { style: { background: nf } }), 'NS 未找到源程序'),
       h('span', null, h('i', { style: { background: ce } }), 'CE 等编译失败'),
-      h('span', { class: 'right' }, '单击选择 · 双击查看详情'))));
+      h('span', { class: 'right' }, '拖动或 Shift 框选 · Ctrl 多选 · 双击查看详情'))));
 }
 
 // During the contest time the server hides scores and source code: show the submissions (code size)
@@ -1673,37 +1727,36 @@ function renderRunningResults(page, selBtn, delBtn) {
     page.appendChild(h('div', { class: 'empty' }, '暂无选手。把程序放到 ', h('code', null, 'source/<选手>/'), ' 后点“刷新选手”。'));
     return;
   }
-  const toggle = (key, el) => {
-    if (S.resultSel.has(key)) { S.resultSel.delete(key); el.classList.remove('selected'); } else { S.resultSel.add(key); el.classList.add('selected'); }
+  const list = c.contestants.slice().sort((a, b) => lessFileName(a.name, b.name));
+  const bind = resultGridSelection(list, () => {
     selBtn.disabled = !S.resultSel.size;
     delBtn.disabled = judging || !S.resultSel.size;
-  };
-  const list = c.contestants.slice().sort((a, b) => lessFileName(a.name, b.name));
+  });
+  // while this contest is being judged the server does not tell which submissions are judged already
+  const showJudged = !c.judging;
   let submitted = 0, judged = 0;
   const table = h('table', { class: 'grid results running' },
-    h('tr', null, h('th', null, '选手'), c.tasks.map((t) => h('th', null, t.problemTitle)), h('th', null, '已提交'), h('th', null, '已评测')),
-    list.map((ct) => {
-      const nameKey = ct.name + '|*';
-      const nameCell = h('td', { class: 'name' + (S.resultSel.has(nameKey) ? ' selected' : '') }, ct.name);
-      nameCell.addEventListener('click', () => toggle(nameKey, nameCell));
-      const sub = ct.tasks.filter((r) => r.submitted).length, jud = ct.tasks.filter((r) => r.judged).length;
+    h('tr', null, h('th', null, '选手'), c.tasks.map((t) => h('th', null, t.problemTitle)), h('th', null, '已提交'), showJudged ? h('th', null, '已评测') : null),
+    list.map((ct, row) => {
+      const nameCell = h('td', { class: 'name' }, ct.name);
+      bind(nameCell, row, -1);
+      const sub = ct.tasks.filter((r) => r.submitted).length, jud = ct.tasks.filter((r) => r.submitted && r.judged).length;
       submitted += sub; judged += jud;
       return h('tr', null, nameCell,
         ct.tasks.map((r, j) => {
-          const key = ct.name + '|' + j;
-          const td = h('td', { class: 'cell' + (S.resultSel.has(key) ? ' selected' : ''), title: r.sourceFile || '' },
+          const td = h('td', { class: 'cell', title: r.sourceFile || '' },
             r.submitted ? formatSize(r.codeSize) : h('span', { class: 'muted' }, '未提交'),
-            h('span', { class: 'judge-mark ' + (r.judged ? 'done' : '') }, r.judged ? '已评测' : '未评测'));
-          td.addEventListener('click', () => toggle(key, td));
+            r.submitted && showJudged ? h('span', { class: 'judge-mark ' + (r.judged ? 'done' : '') }, r.judged ? '已评测' : '未评测') : null);
+          bind(td, row, j);
           return td;
         }),
         h('td', { class: 'muted' }, `${sub} / ${c.tasks.length}`),
-        h('td', { class: 'muted' }, `${jud} / ${c.tasks.length}`));
+        showJudged ? h('td', { class: 'muted' }, `${jud} / ${c.tasks.length}`) : null);
     }));
   const cells = list.length * c.tasks.length;
   page.appendChild(h('div', { class: 'results-wrap' }, table,
     h('div', { class: 'legend' },
-      h('span', null, `${list.length} 名选手 · 提交 ${submitted} / ${cells} · 已评测 ${judged} / ${cells}`),
+      h('span', null, `${list.length} 名选手 · 提交 ${submitted} / ${cells}` + (showJudged ? ` · 已评测 ${judged} / ${submitted}` : ' · 评测中')),
       h('span', { class: 'right' }, '数字为代码长度'))));
 }
 
@@ -2585,7 +2638,7 @@ function updateJudgeBadge() {
   const waiting = st ? (st.queue || []).length : 0;
   if (st && (st.running || waiting)) {
     b.classList.remove('hidden');
-    b.textContent = (st.running ? `评测中 ${st.tasksDone}/${st.tasksTotal}` : '评测') + (waiting ? ` · 排队 ${waiting}` : '');
+    b.textContent = (st.running ? `评测中 ${judgePercent(st).toFixed(0)}%` : '评测') + (waiting ? ` · 排队 ${waiting}` : '');
   } else b.classList.add('hidden');
   renderJudgeProgress();
 }
@@ -2635,11 +2688,13 @@ function renderJudgePanel() {
     onclick: async () => { try { await api('POST', cpath(S.judge.status.contest) + '/judge/stop'); } catch (e) { fail(e); } },
   }, '停止评测');
   slot.appendChild(h('div', { class: 'judge-panel' },
-    h('div', { class: 'jp-head' }, h('b', null, '评测'), h('span', { class: 'muted small-text', id: 'judge-label' }),
+    h('div', { class: 'jp-head' }, h('b', null, '评测'), h('span', { class: 'muted small-text', id: 'judge-contest' }),
       h('button', { class: 'x', title: '收起', onclick: () => { S.judge.panelOpen = false; renderJudgePanel(); } }, '✕')),
-    h('div', { class: 'jp-progress' }, h('div', { class: 'progress' }, h('div', { id: 'judge-bar' }))),
     h('div', { class: 'jp-queue', id: 'judge-queue' }),
     log,
+    h('div', { class: 'jp-progress' },
+      h('div', { class: 'jp-progress-label' }, h('span', null, '总进度'), h('span', { id: 'judge-label' })),
+      h('div', { class: 'progress' }, h('div', { id: 'judge-bar' }))),
     h('div', { class: 'jp-foot' }, stopBtn,
       h('button', { class: 'right', onclick: () => { S.judge.log = []; renderJudgePanel(); } }, '清空'))));
   log.scrollTop = log.scrollHeight;
@@ -2674,13 +2729,19 @@ function renderJudgeQueue() {
   }
 }
 
+// Progress of the running job: time limits of the judged (or skipped) cases / time limits of all its cases.
+const judgePercent = (st) => (st.progressMaximum > 0 ? Math.min(100, (st.progress / st.progressMaximum) * 100) : 0);
+
 function renderJudgeProgress() {
   const st = S.judge.status;
-  const bar = $('#judge-bar'), label = $('#judge-label'), stop = $('#judge-stop');
+  const bar = $('#judge-bar'), label = $('#judge-label'), stop = $('#judge-stop'), contest = $('#judge-contest');
   if (!bar || !st) { if (stop) stop.disabled = true; return; }
-  const pct = st.progressMaximum > 0 ? Math.min(100, (st.progress / st.progressMaximum) * 100) : 0;
-  bar.style.width = (st.running ? pct : 100) + '%';
-  label.textContent = st.running ? `${st.contest} · ${st.tasksDone} / ${st.tasksTotal} · ${pct.toFixed(0)}%` : '已结束';
+  const pct = judgePercent(st);
+  bar.style.width = (st.running ? pct : st.finished ? 100 : 0) + '%';
+  if (contest) contest.textContent = st.running ? st.contest : '';
+  // during the contest time the server only gives the overall progress, not the number of submissions
+  const count = st.running && st.tasksTotal !== undefined ? `${st.tasksDone} / ${st.tasksTotal} 项 · ` : '';
+  label.textContent = st.running ? count + pct.toFixed(0) + '%' : st.finished ? '已结束' : '—';
   stop.disabled = !st.running || st.stopRequested;
 }
 

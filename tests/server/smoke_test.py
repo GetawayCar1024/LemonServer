@@ -263,8 +263,8 @@ while True:
     if not st["judging"]:
         break
     time.sleep(0.3)
-cases = [e for e in events if e["type"] == "case"]
-assert cases and all("result" not in e and "score" not in e for e in cases), cases[:2]
+# only the start / end of the job: neither results nor which submissions are judged
+assert events and {e["type"] for e in events} <= {"start", "finished", "stopping", "skipped"}, events[:3]
 _, r = call("GET", "/api/contests", token=key, expect=200)
 assert next(x for x in r["contests"] if x["name"] == CONTEST)["running"]
 _, r = call("PUT", c, {"startTime": None, "endTime": None}, key, expect=200)
@@ -400,4 +400,38 @@ wait_idle()
 for n in ("克隆测试", "克隆测试2", "克隆测试3"):
     call("DELETE", "/api/contests/" + urllib.parse.quote(n), token=key, expect=200)
 print("clone OK")
+
+# progress: skipped cases count as judged too, so a finished job is at 100%
+call("POST", c + "/clone", {"name": "进度测试", "withSubmissions": True}, key, expect=201)
+P = "/api/contests/" + urllib.parse.quote("进度测试")
+case = lambda names, score, deps=(): {"fullScore": score, "timeLimit": 1000, "memoryLimit": 256,
+                                      "inputFiles": [f"aplusb/{n}.in" for n in names],
+                                      "outputFiles": [f"aplusb/{n}.out" for n in names],
+                                      "dependenceSubtask": list(deps)}
+# wa fails 2.in: the rest of test case 1 is skipped, and test case 2 (depending on it) entirely
+call("PUT", P + "/tasks/0", {"testCases": [case([2, 1, 3], 50), case([4], 50, [1])]}, key, expect=200)
+call("POST", P + "/judge", {"mode": "selected", "items": [{"contestant": "wa"}]}, key, expect=202)
+wait_idle()
+_, st = call("GET", "/api/judge/status", token=key, expect=200)
+assert st["progressMaximum"] == 4000 and st["progress"] == st["progressMaximum"], (st["progress"], st["progressMaximum"])
+assert sum(1 for e in st["events"] if e["type"] == "case") == 4, [e for e in st["events"] if e["type"] == "case"]
+
+# during the contest time, while the contest is being judged: only the overall progress
+now = int(time.time() * 1000)
+call("PUT", P, {"startTime": now - 60000, "endTime": now + 3600000}, key, expect=200)
+call("POST", P + "/judge", {"mode": "all"}, key, expect=202)
+_, r = call("GET", P, token=key, expect=200)
+assert r["judging"] and all("judged" not in t for x in r["contestants"] for t in x["tasks"]), r["contestants"][0]
+assert all("judgingTime" not in x and "submitted" in x["tasks"][0] for x in r["contestants"]), r["contestants"][0]
+_, st = call("GET", "/api/judge/status", token=key, expect=200)
+assert st["contestRunning"] and "tasksDone" not in st and "progress" in st, st
+assert {e["type"] for e in st["events"]} <= {"start", "finished", "stopping", "skipped"}, st["events"]
+_, qu = call("GET", "/api/judge-queue", token=key, expect=200)
+assert qu["running"] is None or "tasksDone" not in qu["running"], qu
+wait_idle()
+_, r = call("GET", P, token=key, expect=200)
+assert all("judged" in t for x in r["contestants"] for t in x["tasks"]), r["contestants"][0]  # not judging any more
+call("PUT", P, {"startTime": None, "endTime": None}, key, expect=200)
+call("DELETE", P, token=key, expect=200)
+print("progress / contest-time judging OK")
 print("ALL OK")

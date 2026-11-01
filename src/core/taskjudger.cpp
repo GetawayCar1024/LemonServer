@@ -422,8 +422,12 @@ int TaskJudger::judge() {
 		if (! dependenceSubtask.empty())
 			score[i].push_back(overallStatus[i]);
 
-		if (isSkipped)
+		if (isSkipped) {
+			// skipped cases count as judged for the progress as well
+			for (int j = 0; j < curTestCase->getInputFiles().size(); j++)
+				taskSkipped(std::make_pair(i, j));
 			continue;
+		}
 
 		for (int j = 0; j < task->getTestCase(i)->getInputFiles().size(); j++) {
 			if (cancellation.isCanceled())
@@ -435,7 +439,9 @@ int TaskJudger::judge() {
 
 			if (overallStatus[i] < 0 || isSkipped) {
 				overallStatus[i] = -1;
-				taskSkipped(std::make_pair(i, j++));
+				// the remaining cases of this test case are skipped; each counts for the progress
+				for (int k = j; k < curTestCase->getInputFiles().size(); k++)
+					taskSkipped(std::make_pair(i, k));
 				break;
 			}
 
