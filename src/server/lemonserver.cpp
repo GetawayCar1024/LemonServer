@@ -159,19 +159,6 @@ namespace {
 		return name;
 	}
 
-	bool cellMatches(const Task *task, const Contestant *ct, int j, const QSet<int> &compileStates,
-	                 const QSet<int> &resultStates) {
-		if (! ct->getCheckJudged(j))
-			return false;
-		if (task->getTaskType() != Task::AnswersOnly && compileStates.contains(int(ct->getCompileState(j))))
-			return true;
-		for (const auto &row : ct->getResult(j))
-			for (auto r : row)
-				if (resultStates.contains(int(r)))
-					return true;
-		return false;
-	}
-
 	// "name.ext" -> "name (2).ext" until it does not exist in dir
 	QString uniqueName(const QDir &dir, const QString &name) {
 		if (! dir.exists(name))
@@ -262,12 +249,6 @@ namespace {
 		}
 		return true;
 	}
-	QList<std::pair<QString, QVector<int>>> toJudgeList(const QMap<QString, QVector<int>> &mapping) {
-		QList<std::pair<QString, QVector<int>>> list;
-		for (auto it = mapping.constBegin(); it != mapping.constEnd(); ++it)
-			list.append({it.key(), it.value()});
-		return list;
-	}
 } // namespace
 
 LemonServer::LemonServer(Settings *settings, ServerConfig *config, ContestManager *manager, QString webRoot,
@@ -327,10 +308,8 @@ std::optional<QHttpServerResponse> LemonServer::withContest(const QString &name,
 		return errorResponse(Status::Conflict, tr("Default contest folder is not configured"));
 	QString error;
 	Contest *c = manager->open(name, &error);
-	if (! c) {
-		const bool busy = manager->isJudging();
-		return errorResponse(busy ? Status::Conflict : Status::NotFound, error);
-	}
+	if (! c)
+		return errorResponse(Status::NotFound, error);
 	*out = c;
 	return std::nullopt;
 }
@@ -339,6 +318,40 @@ std::optional<QHttpServerResponse> LemonServer::notWhileJudging() const {
 	if (manager->isJudging())
 		return errorResponse(Status::Conflict, tr("Judging is in progress"));
 	return std::nullopt;
+}
+
+std::optional<QHttpServerResponse> LemonServer::notWhileBusy() const {
+	if (manager->isBusy(manager->currentName()))
+		return QHttpServerResponse(
+		    QJsonObject{{"error", tr("This contest is being judged or waiting to be judged. Remove its judging "
+		                             "jobs from the queue to change it.")},
+		                {"busy", true}},
+		    Status::Conflict);
+	return std::nullopt;
+}
+
+QJsonObject LemonServer::judgeStatusJson(qint64 since) const {
+	auto status = manager->judgeStatus(since);
+	const QString judged = status["contest"].toString();
+	if (! judged.isEmpty() && manager->isContestRunning(judged)) {
+		// keep the progress (which submission is being judged), drop the results
+		QJsonArray events;
+		for (const auto &v : status["events"].toArray()) {
+			auto e = v.toObject();
+			const QString type = e["type"].toString();
+			if (type == "dependence")
+				continue;
+			if (type == "case")
+				for (const char *key : {"result", "score", "timeUsed", "memoryUsed"})
+					e.remove(key);
+			if (type == "compile")
+				e.remove("state");
+			events.append(e);
+		}
+		status["events"] = events;
+		status["contestRunning"] = true;
+	}
+	return status;
 }
 
 std::optional<QHttpServerResponse> LemonServer::notWhileRunning() const {
@@ -470,7 +483,9 @@ QJsonObject LemonServer::contestJson(Contest *contest) const {
 	                {"totalScore", contest->getTotalScore()},
 	                {"tasks", tasks},
 	                {"contestants", contestants},
-	                {"judging", manager->isJudging()}};
+	                {"judging", manager->judgingContest() == manager->currentName()},
+	                {"busy", manager->isBusy(manager->currentName())},
+	                {"queuedJobs", manager->queuedJobs(manager->currentName())}};
 	const auto props = manager->propertiesJson();
 	for (auto it = props.begin(); it != props.end(); ++it)
 		obj[it.key()] = it.value();
@@ -748,6 +763,8 @@ void LemonServer::setupSettingsRoutes() {
 			return std::move(*r);
 		if (auto r = notWhileJudging())
 			return std::move(*r);
+		if (manager->hasQueuedJobs())
+			return errorResponse(Status::Conflict, tr("Contests are waiting to be judged"));
 		bool ok = false;
 		const auto body = parseBody(req, &ok);
 		const QString root = body["contestRoot"].toString().trimmed();
@@ -757,7 +774,7 @@ void LemonServer::setupSettingsRoutes() {
 			return errorResponse(Status::BadRequest, tr("Please use an absolute path"));
 		if (! QDir().mkpath(root))
 			return errorResponse(Status::BadRequest, tr("Cannot create folder %1").arg(root));
-		manager->close();
+		manager->closeAll();
 		config->setContestRoot(root);
 		QDir::setCurrent(config->contestRoot());
 		return okResponse({{"contestRoot", QDir::toNativeSeparators(config->contestRoot())}});
@@ -1053,8 +1070,9 @@ void LemonServer::setupContestRoutes() {
 		if (auto r = denied(req))
 			return std::move(*r);
 		return jsonResponse(QJsonObject{{"contestRoot", QDir::toNativeSeparators(config->contestRoot())},
-		                                {"current", manager->currentName()},
 		                                {"judging", manager->isJudging()},
+		                                {"judgingContest", manager->judgingContest()},
+		                                {"queue", manager->queueJson()["queue"]},
 		                                {"contests", manager->listContests()}});
 	});
 
@@ -1091,6 +1109,9 @@ void LemonServer::setupContestRoutes() {
 		const auto body = parseBody(req, &ok);
 		if (! ok)
 			return errorResponse(Status::BadRequest, "invalid JSON");
+		if (! body.isEmpty())
+			if (auto r = notWhileBusy())
+				return std::move(*r);
 		if (body.contains("startTime") || body.contains("endTime")) {
 			// milliseconds since the epoch or an ISO 8601 string; null / "" clears the contest time
 			const auto parseTime = [](const QJsonValue &v) {
@@ -1136,6 +1157,8 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
+		             if (auto r = notWhileBusy())
+			             return std::move(*r);
 		             if (! req.body().startsWith("PK"))
 			             return errorResponse(Status::BadRequest, tr("Not a valid zip archive"));
 		             QSaveFile f(QDir(manager->currentDir()).absoluteFilePath("down.zip"));
@@ -1153,6 +1176,8 @@ void LemonServer::setupContestRoutes() {
 			             return std::move(*r);
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
+			             return std::move(*r);
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             const QString file = manager->downZip();
 		             QString error;
@@ -1194,7 +1219,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             bool ok = false;
 		             auto body = parseBody(req, &ok);
@@ -1250,7 +1275,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             Task *t = c->getTask(index);
 		             if (! t)
@@ -1273,7 +1298,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             if (! c->getTask(index))
 			             return errorResponse(Status::NotFound, "no such task");
@@ -1289,7 +1314,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             bool ok = false;
 		             const auto body = parseBody(req, &ok);
@@ -1318,7 +1343,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             bool ok = false;
 		             const auto body = parseBody(req, &ok);
@@ -1343,7 +1368,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             c->refreshContestantList();
 		             manager->save();
@@ -1357,7 +1382,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             bool ok = false;
 		             const auto body = parseBody(req, &ok);
@@ -1394,7 +1419,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             if (! c->getContestant(who))
 			             return errorResponse(Status::NotFound, "no such contestant");
@@ -1442,74 +1467,31 @@ void LemonServer::setupContestRoutes() {
 		             if (! ok)
 			             return errorResponse(Status::BadRequest, "invalid JSON");
 		             const QString mode = body["mode"].toString("all");
-		             if (body["refresh"].toBool()) { // pick up new contestant folders first
-			             if (auto r = notWhileJudging())
-				             return std::move(*r);
-			             c->refreshContestantList();
-			             manager->save();
-		             }
 		             // choosing cells by their result would reveal the results
 		             if (mode != "all" && mode != "unjudged" && mode != "selected")
 			             if (auto r = notWhileRunning())
 				             return std::move(*r);
-		             const auto contestants = c->getContestantList();
-		             const auto tasks = c->getTaskList();
-		             QMap<QString, QVector<int>> mapping;
-		             if (mode == "all") {
-			             for (auto *ct : contestants)
-				             for (int j = 0; j < tasks.size(); j++)
-					             mapping[ct->getContestantName()].push_back(j);
-		             } else if (mode == "unjudged") { // ResultViewer::judgeUnjudged()
-			             for (auto *ct : contestants)
-				             for (int j = 0; j < tasks.size(); j++)
-					             if (ct->getTaskScore(j) == -1)
-						             mapping[ct->getContestantName()].push_back(j);
-		             } else if (mode == "grey") { // ResultViewer::judgeGrey()
-			             for (auto *ct : contestants)
-				             for (int j = 0; j < tasks.size(); j++)
-					             if (ct->getCompileState(j) == NoValidSourceFile)
-						             mapping[ct->getContestantName()].push_back(j);
-		             } else if (mode == "magenta") { // ResultViewer::judgeMagenta()
-			             for (auto *ct : contestants)
-				             for (int j = 0; j < tasks.size(); j++)
-					             if (tasks[j]->getTaskType() != Task::AnswersOnly &&
-					                 ct->getCompileState(j) != CompileSuccessfully &&
-					                 ct->getCompileState(j) != NoValidSourceFile &&
-					                 ct->getCompileState(j) != NoValidGraderFile)
-						             mapping[ct->getContestantName()].push_back(j);
-		             } else if (mode == "selected") { // ResultViewer::judgeSelected()
-			             for (const auto &v : body["items"].toArray()) {
-				             const auto item = v.toObject();
-				             const QString who = item["contestant"].toString();
-				             if (! item.contains("tasks")) {
-					             for (int j = 0; j < tasks.size(); j++)
-						             mapping[who].push_back(j);
-				             } else {
-					             for (const auto &t : item["tasks"].toArray())
-						             mapping[who].push_back(t.toInt());
-				             }
-			             }
-		             } else if (mode == "state") {
-			             // rejudge the cells having a given compile state or containing a given case result
-			             QSet<int> compileStates, resultStates;
-			             for (const auto &v : body["compileStates"].toArray())
-				             compileStates.insert(v.toInt());
-			             for (const auto &v : body["resultStates"].toArray())
-				             resultStates.insert(v.toInt());
-			             for (auto *ct : contestants)
-				             for (int j = 0; j < tasks.size(); j++)
-					             if (cellMatches(tasks[j], ct, j, compileStates, resultStates))
-						             mapping[ct->getContestantName()].push_back(j);
-		             } else {
-			             return errorResponse(Status::BadRequest,
-			                                  "mode must be all, unjudged, grey, magenta, state or selected");
-		             }
+		             QJsonObject request{{"mode", mode}};
+		             for (const char *key : {"items", "compileStates", "resultStates", "refresh"})
+			             if (body.contains(key))
+				             request[key] = body[key];
+		             QJsonObject job;
 		             QString error;
-		             if (! manager->startJudge(toJudgeList(mapping), &error))
-			             return QHttpServerResponse(
-			                 QJsonObject{{"error", error}, {"nothingToJudge", ! manager->isJudging() && mapping.isEmpty()}},
-			                 Status::Conflict);
-		             return jsonResponse(manager->judgeStatus(0), Status::Accepted);
+		             bool nothingToJudge = false;
+		             if (! manager->enqueueJudge(request, &job, &error, &nothingToJudge))
+			             return QHttpServerResponse(QJsonObject{{"error", error}, {"nothingToJudge", nothingToJudge}},
+			                                        nothingToJudge ? Status::Conflict : Status::BadRequest);
+		             auto status = judgeStatusJson(0);
+		             status["job"] = job;
+		             return jsonResponse(status, Status::Accepted);
+	             });
+
+	// Remove every judging job of the contest from the queue (and stop it if it is being judged).
+	server.route("/api/contests/<arg>/judge", Method::Delete,
+	             [this](const QString &name, const QHttpServerRequest &req) {
+		             if (auto r = denied(req))
+			             return std::move(*r);
+		             return okResponse({{"removed", manager->dequeueContest(name)}});
 	             });
 
 	// How many (contestant, task) cells have each compile state / contain each case result.
@@ -1553,40 +1535,37 @@ void LemonServer::setupContestRoutes() {
 	             [this](const QString &name, const QHttpServerRequest &req) {
 		             if (auto r = denied(req))
 			             return std::move(*r);
-		             if (name != manager->currentName())
+		             if (! manager->stopJudge(name))
 			             return errorResponse(Status::Conflict, tr("This contest is not being judged"));
-		             manager->stopJudge();
 		             return okResponse();
 	             });
 
-	server.route("/api/contests/<arg>/judge/status", Method::Get,
-	             [this](const QString &name, const QHttpServerRequest &req) {
-		             if (auto r = denied(req))
-			             return std::move(*r);
-		             Contest *c = nullptr;
-		             if (auto r = withContest(name, &c))
-			             return std::move(*r);
-		             auto status = manager->judgeStatus(queryValue(req, "since").toLongLong());
-		             if (manager->isContestRunning()) {
-			             // keep the progress (which submission is being judged), drop the results
-			             QJsonArray events;
-			             for (const auto &v : status["events"].toArray()) {
-				             auto e = v.toObject();
-				             const QString type = e["type"].toString();
-				             if (type == "dependence")
-					             continue;
-				             if (type == "case")
-					             for (const char *key : {"result", "score", "timeUsed", "memoryUsed"})
-						             e.remove(key);
-				             if (type == "compile")
-					             e.remove("state");
-				             events.append(e);
-			             }
-			             status["events"] = events;
-			             status["contestRunning"] = true;
-		             }
-		             return jsonResponse(status);
-	             });
+	// The judging log is shared by all contests (one job at a time); the contest in the path is not used.
+	server.route("/api/contests/<arg>/judge/status", Method::Get, [this](const QString &, const QHttpServerRequest &req) {
+		if (auto r = denied(req))
+			return std::move(*r);
+		return jsonResponse(judgeStatusJson(queryValue(req, "since").toLongLong()));
+	});
+	server.route("/api/judge/status", Method::Get, [this](const QHttpServerRequest &req) {
+		if (auto r = denied(req))
+			return std::move(*r);
+		return jsonResponse(judgeStatusJson(queryValue(req, "since").toLongLong()));
+	});
+
+	// The judging queue of the whole server: {"running": job | null, "queue": [jobs]}
+	server.route("/api/judge-queue", Method::Get, [this](const QHttpServerRequest &req) {
+		if (auto r = denied(req))
+			return std::move(*r);
+		return jsonResponse(manager->queueJson());
+	});
+	server.route("/api/judge-queue/<arg>", Method::Delete, [this](qint64 id, const QHttpServerRequest &req) {
+		if (auto r = denied(req))
+			return std::move(*r);
+		QString error;
+		if (! manager->cancelJob(id, &error))
+			return errorResponse(Status::NotFound, error);
+		return okResponse();
+	});
 
 	// ---------------- export / statistics ----------------
 	server.route("/api/contests/<arg>/export", Method::Get,
@@ -1868,7 +1847,7 @@ void LemonServer::setupFileRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             bool ok = false;
 		             const auto body = parseBody(req, &ok);
@@ -1901,7 +1880,7 @@ void LemonServer::setupFileRoutes() {
 			             Contest *c = nullptr;
 			             if (auto r = withContest(name, &c))
 				             return std::move(*r);
-			             if (auto r = notWhileJudging())
+			             if (auto r = notWhileBusy())
 				             return std::move(*r);
 			             bool ok = false;
 			             const auto body = parseBody(req, &ok);
@@ -1957,7 +1936,7 @@ void LemonServer::setupFileRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
-		             if (auto r = notWhileJudging())
+		             if (auto r = notWhileBusy())
 			             return std::move(*r);
 		             bool ok = false;
 		             const auto body = parseBody(req, &ok);

@@ -26,13 +26,21 @@
 
 #define LEMON_MODULE_NAME "TaskJudger"
 
-TaskJudger::TaskJudger(QObject *parent) : QObject(parent) { compileState = NoValidSourceFile; }
+TaskJudger::TaskJudger(QObject *parent)
+    : QObject(parent), dataDir(Settings::dataPath()), sourceDir(Settings::sourcePath()) {
+	compileState = NoValidSourceFile;
+}
 
 void TaskJudger::setSettings(const Settings *_settings) { settings = _settings; }
 
 void TaskJudger::setTask(const Task *_task) { task = _task; }
 
 void TaskJudger::setContestantName(QString name) { contestantName = std::move(name); }
+
+void TaskJudger::setPaths(QString data, QString source) {
+	dataDir = std::move(data);
+	sourceDir = std::move(source);
+}
 
 // Get executable file
 auto TaskJudger::traditionalTaskPrepare() -> bool {
@@ -43,8 +51,8 @@ auto TaskJudger::traditionalTaskPrepare() -> bool {
 	QDir contestantDir;
 	contestantDir =
 	    ! task->getSubFolderCheck()
-	        ? QDir(Settings::sourcePath() + contestantName)
-	        : QDir(Settings::sourcePath() + contestantName + QDir::separator() + task->getSourceFileName());
+	        ? QDir(sourceDir + contestantName)
+	        : QDir(sourceDir + contestantName + QDir::separator() + task->getSourceFileName());
 	QString contestantDirName = contestantDir.path();
 	const QList<Compiler *> &compilerList = settings->getCompilerList();
 
@@ -114,10 +122,10 @@ auto TaskJudger::traditionalTaskPrepare() -> bool {
 		QString extraFiles = "";
 
 		if (task->getTaskType() == Task::Interaction) {
-			QFile::copy(Settings::dataPath() + task->getInteractor(),
+			QFile::copy(dataDir + task->getInteractor(),
 			            QDir::toNativeSeparators(temporaryDir.path()) + QDir::separator() + contestantName +
 			                QDir::separator() + task->getInteractorName());
-			QFile::copy(Settings::dataPath() + task->getGrader(),
+			QFile::copy(dataDir + task->getGrader(),
 			            QDir::toNativeSeparators(temporaryDir.path()) + QDir::separator() + contestantName +
 			                QDir::separator() + "__grader.cpp");
 		}
@@ -127,7 +135,7 @@ auto TaskJudger::traditionalTaskPrepare() -> bool {
 			graderNames = task->getGraderFilesName();
 
 			for (int i = 0; i < graderPaths.length(); i++) {
-				QFile::copy(Settings::dataPath() + graderPaths[i],
+				QFile::copy(dataDir + graderPaths[i],
 				            QDir::toNativeSeparators(temporaryDir.path()) + QDir::separator() +
 				                contestantName + QDir::separator() + graderNames[i]);
 				extraFiles = extraFiles + " " + graderNames[i] + " ";
@@ -463,6 +471,7 @@ int TaskJudger::judge() {
 
 			caseJudger->setSpecialJudgeTimeLimit(settings->getSpecialJudgeTimeLimit());
 			caseJudger->setDiffPath(settings->getDiffPath());
+			caseJudger->setDataPath(dataDir);
 
 			if (task->getTaskType() == Task::Traditional || task->getTaskType() == Task::Interaction ||
 			    task->getTaskType() == Task::Communication ||
@@ -482,16 +491,16 @@ int TaskJudger::judge() {
 				fileName += QString(".") + task->getAnswerFileExtension();
 
 				if (! task->getSubFolderCheck())
-					caseJudger->setAnswerFile(Settings::sourcePath() + contestantName + QDir::separator() +
+					caseJudger->setAnswerFile(sourceDir + contestantName + QDir::separator() +
 					                          fileName);
 				else
-					caseJudger->setAnswerFile(Settings::sourcePath() + contestantName + QDir::separator() +
+					caseJudger->setAnswerFile(sourceDir + contestantName + QDir::separator() +
 					                          task->getSourceFileName() + QDir::separator() + fileName);
 			}
 
 			caseJudger->setTask(task);
-			caseJudger->setInputFile(Settings::dataPath() + curTestCase->getInputFiles().at(j));
-			caseJudger->setOutputFile(Settings::dataPath() + curTestCase->getOutputFiles().at(j));
+			caseJudger->setInputFile(dataDir + curTestCase->getInputFiles().at(j));
+			caseJudger->setOutputFile(dataDir + curTestCase->getOutputFiles().at(j));
 			caseJudger->setFullScore(curTestCase->getFullScore());
 
 			if (task->getTaskType() != Task::AnswersOnly) {

@@ -46,9 +46,15 @@ class Contest : public QObject {
 	void writeToJson(QJsonObject &);
 	void readFromStream(QDataStream &);
 	int readFromJson(const QJsonObject &);
+	// Folder of the contest. When it is set, judging reads data/ and source/ from it, so that it does not
+	// depend on the current directory; when empty (the default) they are relative to the current directory.
+	void setContestDirectory(const QString &);
+	QString dataPath() const;
+	QString sourcePath() const;
 
   private:
 	QString contestTitle;
+	QString contestDirectory;
 	Settings *settings{};
 	QList<Task *> taskList;
 	QMap<QString, Contestant *> contestantList;

@@ -90,7 +90,7 @@ namespace {
 ContestManager::ContestManager(Settings *settings, ServerConfig *config, QObject *parent)
     : QObject(parent), settings(settings), config(config) {}
 
-ContestManager::~ContestManager() { close(); }
+ContestManager::~ContestManager() { closeAll(); }
 
 bool ContestManager::isValidContestName(const QString &name) {
 	static const QRegularExpression invalid(R"([<>:"/\\|?*\x00-\x1f])");
@@ -115,7 +115,7 @@ QString ContestManager::findCdf(const QString &dir) const {
 QString ContestManager::currentDir() const { return contest ? contestDir(contestName) : QString(); }
 
 QString ContestManager::currentCdfPath() const {
-	return contest ? QDir(currentDir()).absoluteFilePath(cdfFile) : QString();
+	return contest ? QDir(currentDir()).absoluteFilePath(loaded.value(contestName).cdfFile) : QString();
 }
 
 QJsonArray ContestManager::listContests() const {
@@ -127,11 +127,14 @@ QJsonArray ContestManager::listContests() const {
 		const QString cdf = findCdf(root.absoluteFilePath(name));
 		if (cdf.isEmpty())
 			continue;
-		const auto props = contest && name == contestName ? properties : readProperties(root.absoluteFilePath(name));
+		const auto props =
+		    loaded.contains(name) ? loaded.value(name).properties : readProperties(root.absoluteFilePath(name));
 		const auto start = readTime(props, "startTime"), end = readTime(props, "endTime");
 		QJsonObject item{{"name", name}, {"cdf", QFileInfo(cdf).fileName()},
 		                 {"modified", QFileInfo(cdf).lastModified().toString("yyyy-MM-dd hh:mm:ss")},
-		                 {"current", contest && name == contestName},
+		                 {"judging", judging && running.contest == name},
+		                 {"queuedJobs", queuedJobs(name)},
+		                 {"busy", isBusy(name)},
 		                 {"startTime", msOrNull(start)},
 		                 {"endTime", msOrNull(end)},
 		                 {"running", runningBetween(start, end)},
@@ -164,10 +167,6 @@ bool ContestManager::createContest(const QString &name, const QString &title, QS
 		*error = tr("Invalid contest name");
 		return false;
 	}
-	if (judging) {
-		*error = tr("Judging is in progress");
-		return false;
-	}
 	const QString dir = contestDir(name);
 	if (QDir(dir).exists() && ! findCdf(dir).isEmpty()) {
 		*error = tr("Contest already exists");
@@ -178,17 +177,15 @@ bool ContestManager::createContest(const QString &name, const QString &title, QS
 		*error = tr("Cannot make contest path");
 		return false;
 	}
-	close();
-	contest = new Contest(this);
-	contest->setSettings(settings);
-	contest->setContestTitle(title.isEmpty() ? name : title);
-	contestName = name;
-	cdfFile = name + ".cdf";
-	properties = readProperties(dir);
-	QDir::setCurrent(dir);
-	QDir().mkdir(Settings::dataPath());
-	QDir().mkdir(Settings::sourcePath());
-	connectContest();
+	if (loaded.contains(name))
+		unload(name);
+	auto *c = new Contest(this);
+	c->setSettings(settings);
+	c->setContestTitle(title.isEmpty() ? name : title);
+	QDir(dir).mkdir("data");
+	QDir(dir).mkdir("source");
+	addLoaded(name, c, name + ".cdf");
+	open(name, error);
 
 	LOG("New Contest -", name);
 	return save(error);
@@ -199,12 +196,16 @@ bool ContestManager::deleteContest(const QString &name, QString *error) {
 		*error = tr("Contest not found");
 		return false;
 	}
-	if (judging) {
-		*error = tr("Judging is in progress");
+	if (isBusy(name)) {
+		*error = tr("This contest is being judged or waiting to be judged");
 		return false;
 	}
-	if (contest && name == contestName) {
-		close();
+	if (loaded.contains(name)) {
+		delete loaded.take(name).contest; // not saved: it is deleted anyway
+		if (name == contestName) {
+			contest = nullptr;
+			contestName.clear();
+		}
 	}
 	QDir::setCurrent(config->contestRoot());
 	if (! QDir(contestDir(name)).removeRecursively()) {
@@ -214,14 +215,14 @@ bool ContestManager::deleteContest(const QString &name, QString *error) {
 	return true;
 }
 
-void ContestManager::connectContest() {
-	connect(contest, &Contest::singleCaseFinished, this, &ContestManager::onSingleCaseFinished);
-	connect(contest, &Contest::singleSubtaskDependenceFinished, this,
-	        &ContestManager::onSubtaskDependenceFinished);
-	connect(contest, &Contest::taskJudgingStartedFor, this, &ContestManager::onTaskJudgingStarted);
-	connect(contest, &Contest::taskJudgingFinished, this, &ContestManager::onTaskJudgingFinished);
-	connect(contest, &Contest::compileError, this, &ContestManager::onCompileError);
-	connect(contest, &Contest::compileFinishedFor, this, &ContestManager::onCompileFinished);
+void ContestManager::connectContest(Contest *c) {
+	// only the contest being judged emits these
+	connect(c, &Contest::singleCaseFinished, this, &ContestManager::onSingleCaseFinished);
+	connect(c, &Contest::singleSubtaskDependenceFinished, this, &ContestManager::onSubtaskDependenceFinished);
+	connect(c, &Contest::taskJudgingStartedFor, this, &ContestManager::onTaskJudgingStarted);
+	connect(c, &Contest::taskJudgingFinished, this, &ContestManager::onTaskJudgingFinished);
+	connect(c, &Contest::compileError, this, &ContestManager::onCompileError);
+	connect(c, &Contest::compileFinishedFor, this, &ContestManager::onCompileFinished);
 }
 
 QString ContestManager::importStagingDir(const QString &name) const {
@@ -263,12 +264,17 @@ bool ContestManager::importContest(const QString &stagingDir, QString name, bool
 			*error = tr("Contest %1 already exists").arg(name);
 			return false;
 		}
-		if (judging && name == contestName) {
-			*error = tr("Judging is in progress");
+		if (isBusy(name)) {
+			*error = tr("This contest is being judged or waiting to be judged");
 			return false;
 		}
-		if (contest && name == contestName)
-			close();
+		if (loaded.contains(name)) {
+			delete loaded.take(name).contest; // replaced by the imported one
+			if (name == contestName) {
+				contest = nullptr;
+				contestName.clear();
+			}
+		}
 		QDir::setCurrent(config->contestRoot());
 		if (! QDir(dest).removeRecursively()) {
 			*error = tr("Cannot remove contest folder");
@@ -280,20 +286,17 @@ bool ContestManager::importContest(const QString &stagingDir, QString name, bool
 		return false;
 	}
 	// Make sure the contest can actually be opened by LemonLime.
-	if (! judging) {
-		QString openError;
-		if (! open(name, &openError)) {
-			*error = openError;
-			*finalName = name;
-			return false;
-		}
-	}
 	*finalName = name;
+	QString openError;
+	if (! open(name, &openError)) {
+		*error = openError;
+		return false;
+	}
 	LOG("Imported contest", name);
 	return true;
 }
 
-bool ContestManager::loadContest(const QString &filePath, QString *error) {
+Contest *ContestManager::loadContest(const QString &filePath, QString *error) {
 	// LemonLime::loadContest()
 	auto *newContest = new Contest(this);
 	QFile file(filePath);
@@ -301,7 +304,7 @@ bool ContestManager::loadContest(const QString &filePath, QString *error) {
 	if (! file.open(QFile::ReadOnly)) {
 		*error = tr("Cannot open file %1").arg(QFileInfo(filePath).fileName());
 		delete newContest;
-		return false;
+		return nullptr;
 	}
 	char firstChar = 0;
 	file.peek(&firstChar, 1);
@@ -312,7 +315,7 @@ bool ContestManager::loadContest(const QString &filePath, QString *error) {
 		if (parseError.error != 0 || newContest->readFromJson(inObj) == -1) {
 			*error = tr("File %1 is broken").arg(QFileInfo(filePath).fileName());
 			delete newContest;
-			return false;
+			return nullptr;
 		}
 	} else {
 		QDataStream _in(&file);
@@ -321,7 +324,7 @@ bool ContestManager::loadContest(const QString &filePath, QString *error) {
 		if (checkNumber != unsigned(MagicNumber)) {
 			*error = tr("File %1 is broken").arg(QFileInfo(filePath).fileName());
 			delete newContest;
-			return false;
+			return nullptr;
 		}
 		quint16 checksum = 0;
 		int len = 0;
@@ -331,64 +334,104 @@ bool ContestManager::loadContest(const QString &filePath, QString *error) {
 		if (qChecksum(QByteArrayView(raw)) != checksum) {
 			*error = tr("File %1 is broken").arg(QFileInfo(filePath).fileName());
 			delete newContest;
-			return false;
+			return nullptr;
 		}
 		QByteArray data = qUncompress(raw);
 		QDataStream in(data);
 		newContest->readFromStream(in);
 	}
-	contest = newContest;
-	cdfFile = QFileInfo(filePath).fileName();
-	QDir::setCurrent(QFileInfo(filePath).path());
-	QDir().mkdir(Settings::dataPath());
-	QDir().mkdir(Settings::sourcePath());
-	connectContest();
+	const QDir dir = QFileInfo(filePath).absoluteDir();
+	dir.mkdir("data");
+	dir.mkdir("source");
 
-	LOG("Contest -", contest->getContestTitle(), "loaded successfully");
-	return true;
+	LOG("Contest -", newContest->getContestTitle(), "loaded successfully");
+	return newContest;
+}
+
+void ContestManager::addLoaded(const QString &name, Contest *c, const QString &cdfFile) {
+	c->setContestDirectory(contestDir(name));
+	connectContest(c);
+	loaded.insert(name, Loaded{c, cdfFile, readProperties(contestDir(name)), QDateTime::currentDateTimeUtc()});
+	evictIdleContests();
+}
+
+void ContestManager::unload(const QString &name) {
+	if (! loaded.contains(name))
+		return;
+	saveContest(name);
+	delete loaded.take(name).contest;
+	if (name == contestName) {
+		contest = nullptr;
+		contestName.clear();
+	}
+}
+
+void ContestManager::evictIdleContests() {
+	// keep a few contests in memory; never the current one or one that is being judged / queued
+	constexpr int kMaxLoaded = 8;
+	while (loaded.size() > kMaxLoaded) {
+		QString oldest;
+		QDateTime oldestTime;
+		for (auto it = loaded.cbegin(); it != loaded.cend(); ++it) {
+			if (it.key() == contestName || isBusy(it.key()))
+				continue;
+			if (oldest.isEmpty() || it->lastUsed < oldestTime) {
+				oldest = it.key();
+				oldestTime = it->lastUsed;
+			}
+		}
+		if (oldest.isEmpty())
+			return;
+		unload(oldest);
+	}
 }
 
 Contest *ContestManager::open(const QString &name, QString *error) {
-	if (contest && name == contestName)
-		return contest;
 	if (! isValidContestName(name)) {
 		*error = tr("Invalid contest name");
 		return nullptr;
 	}
-	if (judging) {
-		*error = tr("Contest %1 is being judged, cannot switch contest now").arg(contestName);
-		return nullptr;
+	auto it = loaded.find(name);
+	if (it == loaded.end()) {
+		const QString cdf = findCdf(contestDir(name));
+		if (cdf.isEmpty()) {
+			*error = tr("Contest not found");
+			return nullptr;
+		}
+		Contest *c = loadContest(cdf, error);
+		if (! c)
+			return nullptr;
+		addLoaded(name, c, QFileInfo(cdf).fileName());
+		it = loaded.find(name);
 	}
-	const QString cdf = findCdf(contestDir(name));
-	if (cdf.isEmpty()) {
-		*error = tr("Contest not found");
-		return nullptr;
-	}
-	close();
-	if (! loadContest(cdf, error))
-		return nullptr;
+	it->lastUsed = QDateTime::currentDateTimeUtc();
+	contest = it->contest;
 	contestName = name;
-	properties = readProperties(contestDir(name));
-	events.clear();
-	tasksDone = tasksTotal = 0;
-	progressValue = progressMaximum = 0;
-	judgeStarted = judgeFinished = QDateTime();
+	// request-scoped helpers use LemonLime's paths relative to the contest folder
+	QDir::setCurrent(contestDir(name));
 	return contest;
 }
 
-void ContestManager::close() {
-	if (! contest)
-		return;
-	save();
-	delete contest;
+void ContestManager::closeAll() {
+	if (judging && loaded.contains(running.contest))
+		loaded[running.contest].contest->stopJudgingSlot();
+	for (const auto &name : loaded.keys())
+		saveContest(name);
+	for (auto &l : loaded)
+		delete l.contest;
+	loaded.clear();
 	contest = nullptr;
 	contestName.clear();
-	cdfFile.clear();
-	properties = {};
 }
 
 QString ContestManager::currentPropertiesPath() const {
 	return contest ? QDir(currentDir()).absoluteFilePath(kPropertiesFile) : QString();
+}
+
+const QJsonObject &ContestManager::props() const {
+	static const QJsonObject empty;
+	const auto it = loaded.constFind(contestName);
+	return contest && it != loaded.cend() ? it->properties : empty;
 }
 
 QJsonObject ContestManager::readProperties(const QString &dir) {
@@ -401,7 +444,7 @@ QJsonObject ContestManager::readProperties(const QString &dir) {
 bool ContestManager::writeProperties(QString *error) {
 	QSaveFile file(currentPropertiesPath());
 	if (file.open(QFile::WriteOnly)) {
-		file.write(QJsonDocument(properties).toJson(QJsonDocument::Indented));
+		file.write(QJsonDocument(props()).toJson(QJsonDocument::Indented));
 		if (file.commit())
 			return true;
 	}
@@ -409,11 +452,18 @@ bool ContestManager::writeProperties(QString *error) {
 	return false;
 }
 
-QDateTime ContestManager::startTime() const { return readTime(properties, "startTime"); }
+QDateTime ContestManager::startTime() const { return readTime(props(), "startTime"); }
 
-QDateTime ContestManager::endTime() const { return readTime(properties, "endTime"); }
+QDateTime ContestManager::endTime() const { return readTime(props(), "endTime"); }
 
 bool ContestManager::isContestRunning() const { return contest && runningBetween(startTime(), endTime()); }
+
+bool ContestManager::isContestRunning(const QString &name) const {
+	const auto p = loaded.contains(name) ? loaded.value(name).properties : readProperties(contestDir(name));
+	return runningBetween(readTime(p, "startTime"), readTime(p, "endTime"));
+}
+
+QString ContestManager::downZip() const { return props()["downZip"].toString(); }
 
 bool ContestManager::setContestTime(const QDateTime &start, const QDateTime &end, QString *error) {
 	if (! contest) {
@@ -434,6 +484,7 @@ bool ContestManager::setContestTime(const QDateTime &start, const QDateTime &end
 		*error = tr("The end time must be later than the start time");
 		return false;
 	}
+	auto &properties = loaded[contestName].properties;
 	if (start.isValid()) {
 		properties["startTime"] = start.toUTC().toString(Qt::ISODateWithMs);
 		properties["endTime"] = end.toUTC().toString(Qt::ISODateWithMs);
@@ -451,6 +502,7 @@ bool ContestManager::setDownZip(const QString &relativePath, QString *error) {
 		*error = tr("No contest yet");
 		return false;
 	}
+	auto &properties = loaded[contestName].properties;
 	QString rel = QDir::cleanPath(QString(relativePath).replace('\\', '/'));
 	if (relativePath.trimmed().isEmpty()) {
 		properties.remove("downZip");
@@ -484,23 +536,26 @@ QJsonObject ContestManager::propertiesJson() const {
 	        {"downZip", down}};
 }
 
-bool ContestManager::save(QString *error) {
+bool ContestManager::save(QString *error) { return contest && saveContest(contestName, error); }
+
+bool ContestManager::saveContest(const QString &name, QString *error) {
 	// LemonLime::saveContest()
-	if (! contest)
+	const auto it = loaded.constFind(name);
+	if (it == loaded.cend())
 		return false;
-	QSaveFile file(currentCdfPath());
+	QSaveFile file(QDir(contestDir(name)).absoluteFilePath(it->cdfFile));
 	if (! file.open(QFile::WriteOnly)) {
 		if (error)
-			*error = tr("Cannot open file %1").arg(cdfFile);
-		WARN(cdfFile, "Save Failed");
+			*error = tr("Cannot open file %1").arg(it->cdfFile);
+		WARN(it->cdfFile, "Save Failed");
 		return false;
 	}
 	QJsonObject out;
-	contest->writeToJson(out);
+	it->contest->writeToJson(out);
 	file.write(QJsonDocument(out).toJson(QJsonDocument::Compact));
 	if (! file.commit()) {
 		if (error)
-			*error = tr("Cannot write file %1").arg(cdfFile);
+			*error = tr("Cannot write file %1").arg(it->cdfFile);
 		return false;
 	}
 	lastSave = QDateTime::currentDateTime();
@@ -759,7 +814,7 @@ int ContestManager::markSourceChanged(const QString &who, const QStringList &res
 		}
 		if (! hit)
 			continue;
-		if (judging)
+		if (judging && contestName == running.contest)
 			changedWhileJudging.insert(who + "\n" + QString::number(j));
 		if (ct->getCheckJudged(j)) {
 			ct->setCheckJudged(j, false);
@@ -772,90 +827,331 @@ int ContestManager::markSourceChanged(const QString &who, const QStringList &res
 }
 
 // ----------------------------------------------------------------------------------------------
-// Judging
+// Judging queue
 // ----------------------------------------------------------------------------------------------
 
-bool ContestManager::startJudge(const QList<std::pair<QString, QVector<int>>> &list, QString *error) {
+namespace {
+	bool cellMatches(const Task *task, const Contestant *ct, int j, const QSet<int> &compileStates,
+	                 const QSet<int> &resultStates) {
+		if (! ct->getCheckJudged(j))
+			return false;
+		if (task->getTaskType() != Task::AnswersOnly && compileStates.contains(int(ct->getCompileState(j))))
+			return true;
+		for (const auto &row : ct->getResult(j))
+			for (auto r : row)
+				if (resultStates.contains(int(r)))
+					return true;
+		return false;
+	}
+
+	// The cells a judging request asks for (LemonLime's ResultViewer::judge*()).
+	bool judgeCells(const Contest *contest, const QJsonObject &body, QMap<QString, QVector<int>> *mapping,
+	                QString *error) {
+		const QString mode = body["mode"].toString("all");
+		const auto contestants = contest->getContestantList();
+		const auto tasks = contest->getTaskList();
+		if (mode == "all") {
+			for (auto *ct : contestants)
+				for (int j = 0; j < tasks.size(); j++)
+					(*mapping)[ct->getContestantName()].push_back(j);
+		} else if (mode == "unjudged") { // ResultViewer::judgeUnjudged()
+			for (auto *ct : contestants)
+				for (int j = 0; j < tasks.size(); j++)
+					if (ct->getTaskScore(j) == -1)
+						(*mapping)[ct->getContestantName()].push_back(j);
+		} else if (mode == "grey") { // ResultViewer::judgeGrey()
+			for (auto *ct : contestants)
+				for (int j = 0; j < tasks.size(); j++)
+					if (ct->getCompileState(j) == NoValidSourceFile)
+						(*mapping)[ct->getContestantName()].push_back(j);
+		} else if (mode == "magenta") { // ResultViewer::judgeMagenta()
+			for (auto *ct : contestants)
+				for (int j = 0; j < tasks.size(); j++)
+					if (tasks[j]->getTaskType() != Task::AnswersOnly && ct->getCompileState(j) != CompileSuccessfully &&
+					    ct->getCompileState(j) != NoValidSourceFile && ct->getCompileState(j) != NoValidGraderFile)
+						(*mapping)[ct->getContestantName()].push_back(j);
+		} else if (mode == "selected") { // ResultViewer::judgeSelected()
+			for (const auto &v : body["items"].toArray()) {
+				const auto item = v.toObject();
+				const QString who = item["contestant"].toString();
+				if (! contest->getContestant(who)) {
+					*error = ContestManager::tr("Contestant %1 not found").arg(who);
+					return false;
+				}
+				if (! item.contains("tasks")) {
+					for (int j = 0; j < tasks.size(); j++)
+						(*mapping)[who].push_back(j);
+					continue;
+				}
+				for (const auto &t : item["tasks"].toArray()) {
+					if (t.toInt() < 0 || t.toInt() >= tasks.size()) {
+						*error = ContestManager::tr("Task index %1 out of range").arg(t.toInt());
+						return false;
+					}
+					(*mapping)[who].push_back(t.toInt());
+				}
+			}
+		} else if (mode == "state") {
+			// rejudge the cells having a given compile state or containing a given case result
+			QSet<int> compileStates, resultStates;
+			for (const auto &v : body["compileStates"].toArray())
+				compileStates.insert(v.toInt());
+			for (const auto &v : body["resultStates"].toArray())
+				resultStates.insert(v.toInt());
+			for (auto *ct : contestants)
+				for (int j = 0; j < tasks.size(); j++)
+					if (cellMatches(tasks[j], ct, j, compileStates, resultStates))
+						(*mapping)[ct->getContestantName()].push_back(j);
+		} else {
+			*error = "mode must be all, unjudged, grey, magenta, state or selected";
+			return false;
+		}
+		return true;
+	}
+
+	// Drop unknown contestants / tasks and duplicates; also count the cells and the total time limit.
+	QList<std::pair<QString, QVector<int>>> judgeList(const Contest *contest, const QMap<QString, QVector<int>> &mapping,
+	                                                  qint64 *totalTime, int *count) {
+		QList<std::pair<QString, QVector<int>>> list;
+		*totalTime = 0;
+		*count = 0;
+		const int taskCount = int(contest->getTaskList().size());
+		for (auto it = mapping.cbegin(); it != mapping.cend(); ++it) {
+			if (! contest->getContestant(it.key()))
+				continue;
+			QVector<int> valid;
+			for (int t : it.value()) {
+				if (t < 0 || t >= taskCount || valid.contains(t))
+					continue;
+				valid.append(t);
+				*totalTime += contest->getTask(t)->getTotalTimeLimit();
+			}
+			if (! valid.isEmpty()) {
+				list.append({it.key(), valid});
+				*count += int(valid.size());
+			}
+		}
+		return list;
+	}
+} // namespace
+
+QString ContestManager::Job::mode() const { return request["mode"].toString("all"); }
+
+bool ContestManager::isBusy(const QString &name) const {
+	if (judging && running.contest == name)
+		return true;
+	return queuedJobs(name) > 0;
+}
+
+int ContestManager::queuedJobs(const QString &name) const {
+	int n = 0;
+	for (const auto &j : queue)
+		if (j.contest == name)
+			n++;
+	return n;
+}
+
+QJsonObject ContestManager::jobJson(const Job &job, int position) const {
+	return {{"id", double(job.id)},
+	        {"contest", job.contest},
+	        {"mode", job.mode()},
+	        {"queued", job.queued.toString(Qt::ISODate)},
+	        {"position", position}};
+}
+
+bool ContestManager::enqueueJudge(const QJsonObject &request, QJsonObject *job, QString *error, bool *nothingToJudge) {
+	*nothingToJudge = false;
 	if (! contest) {
 		*error = tr("No contest yet");
 		return false;
 	}
-	if (judging) {
-		*error = tr("Judging is in progress");
-		return false;
+	const bool busy = isBusy(contestName);
+	// "refresh": pick up new contestant folders first. A busy contest is refreshed when its job starts
+	// (refreshing removes contestants, which must not happen while they are being judged).
+	if (! busy && request["refresh"].toBool()) {
+		contest->refreshContestantList();
+		save();
 	}
-	const int taskCount = int(contest->getTaskList().size());
-	QList<std::pair<QString, QVector<int>>> cleanList;
+	// check the request now; the cells are chosen again when the job starts
+	QMap<QString, QVector<int>> mapping;
+	if (! judgeCells(contest, request, &mapping, error))
+		return false;
 	qint64 total = 0;
 	int count = 0;
-	for (const auto &[name, tasks] : list) {
-		if (! contest->getContestant(name)) {
-			*error = tr("Contestant %1 not found").arg(name);
-			return false;
-		}
-		QVector<int> valid;
-		for (int t : tasks) {
-			if (t < 0 || t >= taskCount) {
-				*error = tr("Task index %1 out of range").arg(t);
-				return false;
-			}
-			if (! valid.contains(t)) {
-				valid.append(t);
-				total += contest->getTask(t)->getTotalTimeLimit();
-			}
-		}
-		if (! valid.isEmpty()) {
-			cleanList.append({name, valid});
-			count += int(valid.size());
-		}
-	}
-	if (cleanList.isEmpty()) {
+	judgeList(contest, mapping, &total, &count);
+	if (count == 0 && ! busy) {
 		*error = tr("Nothing to judge");
+		*nothingToJudge = true;
 		return false;
 	}
-
-	judging = true;
-	stopRequested = false;
-	progressValue = 0;
-	progressMaximum = total;
-	tasksDone = 0;
-	tasksTotal = count;
-	changedWhileJudging.clear();
-	judgeStarted = QDateTime::currentDateTime();
-	judgeFinished = QDateTime();
-	events.clear(); // each run has its own log; event ids keep increasing
-	pushEvent({{"type", "start"}, {"tasks", count}});
-
-	// Contest::judge() runs its own event loop until all tasks are judged (like the GUI's modal
-	// JudgingDialog). Start it from the event loop so that the HTTP request can return immediately.
-	QTimer::singleShot(0, this, [this, cleanList] { runJudge(cleanList); });
+	// the same request is already waiting: do not judge it twice
+	for (int i = 0; i < queue.size(); i++) {
+		if (queue[i].contest == contestName && queue[i].request == request) {
+			*job = jobJson(queue[i], i + 1);
+			(*job)["duplicate"] = true;
+			return true;
+		}
+	}
+	const Job newJob{nextJobId++, contestName, request, QDateTime::currentDateTime()};
+	queue.append(newJob);
+	LOG("Queued judging job", newJob.id, "of", contestName, "mode", newJob.mode());
+	// Nothing else to do: start it now, so that the response already shows its progress.
+	if (! judging && ! nextScheduled && queue.size() == 1)
+		startNext();
+	const bool started = judging && running.id == newJob.id;
+	int position = 0;
+	for (int i = 0; i < queue.size() && ! position; i++)
+		if (queue[i].id == newJob.id)
+			position = i + 1;
+	*job = jobJson(newJob, position);
+	if (! started && ! position)
+		(*job)["skipped"] = true; // nothing to judge after all (see the "skipped" event)
+	if (! judging)
+		scheduleNext();
 	return true;
 }
 
+bool ContestManager::cancelJob(qint64 id, QString *error) {
+	if (judging && running.id == id)
+		return stopJudge(running.contest);
+	for (int i = 0; i < queue.size(); i++) {
+		if (queue[i].id == id) {
+			LOG("Removed judging job", id, "of", queue[i].contest, "from the queue");
+			queue.removeAt(i);
+			return true;
+		}
+	}
+	*error = tr("No such judging job");
+	return false;
+}
+
+int ContestManager::dequeueContest(const QString &name) {
+	int n = 0;
+	for (int i = int(queue.size()) - 1; i >= 0; i--) {
+		if (queue[i].contest == name) {
+			queue.removeAt(i);
+			n++;
+		}
+	}
+	if (stopJudge(name))
+		n++;
+	if (n)
+		LOG("Removed", n, "judging job(s) of", name);
+	return n;
+}
+
+bool ContestManager::stopJudge(const QString &name) {
+	if (! judging || running.contest != name || ! loaded.contains(name))
+		return false;
+	if (! stopRequested) {
+		stopRequested = true;
+		pushEvent({{"type", "stopping"}});
+		loaded[name].contest->stopJudgingSlot();
+	}
+	return true;
+}
+
+void ContestManager::scheduleNext() {
+	if (judging || nextScheduled || queue.isEmpty())
+		return;
+	nextScheduled = true;
+	// Contest::judge() runs its own event loop until all tasks are judged (like the GUI's modal
+	// JudgingDialog). Start it from the event loop so that the HTTP request can return immediately.
+	QTimer::singleShot(0, this, [this] {
+		nextScheduled = false;
+		startNext();
+	});
+}
+
+void ContestManager::startNext() {
+	while (! judging && ! queue.isEmpty()) {
+		const Job job = queue.takeFirst();
+		QString error;
+		Contest *c = nullptr;
+		if (loaded.contains(job.contest)) {
+			c = loaded[job.contest].contest;
+		} else {
+			// it may have been unloaded meanwhile (contests that are queued are not, but be safe)
+			const QString cdf = findCdf(contestDir(job.contest));
+			if (! cdf.isEmpty() && (c = loadContest(cdf, &error)))
+				addLoaded(job.contest, c, QFileInfo(cdf).fileName());
+			else if (error.isEmpty())
+				error = tr("Contest not found");
+		}
+		QList<std::pair<QString, QVector<int>>> list;
+		qint64 total = 0;
+		int count = 0;
+		if (c) {
+			if (job.request["refresh"].toBool()) {
+				c->refreshContestantList();
+				saveContest(job.contest);
+			}
+			QMap<QString, QVector<int>> mapping;
+			if (judgeCells(c, job.request, &mapping, &error))
+				list = judgeList(c, mapping, &total, &count);
+			if (list.isEmpty() && error.isEmpty())
+				error = tr("Nothing to judge");
+		}
+		if (list.isEmpty()) {
+			LOG("Skipped judging job", job.id, "of", job.contest, ":", error);
+			pushEvent({{"type", "skipped"}, {"job", double(job.id)}, {"contest", job.contest}, {"error", error}});
+			continue;
+		}
+
+		running = job;
+		judging = true;
+		stopRequested = false;
+		progressValue = 0;
+		progressMaximum = total;
+		tasksDone = 0;
+		tasksTotal = count;
+		changedWhileJudging.clear();
+		judgeStarted = QDateTime::currentDateTime();
+		judgeFinished = QDateTime();
+		events.clear(); // each run has its own log; event ids keep increasing
+		pushEvent({{"type", "start"}, {"tasks", count}, {"job", double(job.id)}, {"contest", job.contest}});
+		LOG("Judging job", job.id, "of", job.contest, ":", count, "cell(s)");
+		QTimer::singleShot(0, this, [this, list] { runJudge(list); });
+		return;
+	}
+}
+
 void ContestManager::runJudge(const QList<std::pair<QString, QVector<int>>> &list) {
-	contest->judge(list);
+	Contest *c = loaded.value(running.contest).contest;
+	c->judge(list);
 	judging = false;
 	// sources replaced during the run may have been judged in their old version
 	for (const auto &key : std::as_const(changedWhileJudging)) {
 		const auto parts = key.split('\n');
-		if (Contestant *ct = contest->getContestant(parts[0])) {
+		if (Contestant *ct = c->getContestant(parts[0])) {
 			const int j = parts[1].toInt();
-			if (j >= 0 && j < contest->getTaskList().size())
+			if (j >= 0 && j < c->getTaskList().size())
 				ct->setCheckJudged(j, false);
 		}
 	}
 	changedWhileJudging.clear();
 	judgeFinished = QDateTime::currentDateTime();
-	save();
-	pushEvent({{"type", "finished"}, {"stopped", stopRequested}});
+	saveContest(running.contest);
+	pushEvent({{"type", "finished"}, {"stopped", stopRequested}, {"job", double(running.id)}, {"contest", running.contest}});
+	scheduleNext();
 }
 
-void ContestManager::stopJudge() {
-	if (! judging || ! contest)
-		return;
-	stopRequested = true;
-	pushEvent({{"type", "stopping"}});
-	contest->stopJudgingSlot();
+QJsonObject ContestManager::queueJson() const {
+	QJsonArray waiting;
+	for (int i = 0; i < queue.size(); i++)
+		waiting.append(jobJson(queue[i], i + 1));
+	QJsonValue current;
+	if (judging) {
+		auto r = jobJson(running, 0);
+		r["tasksDone"] = tasksDone;
+		r["tasksTotal"] = tasksTotal;
+		r["progress"] = double(progressValue);
+		r["progressMaximum"] = double(progressMaximum);
+		r["stopRequested"] = stopRequested;
+		r["started"] = judgeStarted.toString(Qt::ISODate);
+		current = r;
+	}
+	return {{"running", current}, {"queue", waiting}};
 }
 
 QJsonObject ContestManager::judgeStatus(qint64 since) const {
@@ -863,8 +1159,14 @@ QJsonObject ContestManager::judgeStatus(qint64 since) const {
 	for (const auto &e : events)
 		if (e["id"].toInteger() > since)
 			ev.append(e);
-	return {{"contest", contestName},
-	        {"judging", judging},
+	QJsonArray waiting;
+	for (int i = 0; i < queue.size(); i++)
+		waiting.append(jobJson(queue[i], i + 1));
+	// judging: there is still work (a job is being judged or waiting); running: a job is being judged
+	return {{"contest", running.contest},
+	        {"job", double(running.id)},
+	        {"judging", judging || nextScheduled || ! queue.isEmpty()},
+	        {"running", judging},
 	        {"stopRequested", stopRequested},
 	        {"progress", double(progressValue)},
 	        {"progressMaximum", double(progressMaximum)},
@@ -872,6 +1174,7 @@ QJsonObject ContestManager::judgeStatus(qint64 since) const {
 	        {"tasksTotal", tasksTotal},
 	        {"started", judgeStarted.isValid() ? judgeStarted.toString(Qt::ISODate) : QString()},
 	        {"finished", judgeFinished.isValid() ? judgeFinished.toString(Qt::ISODate) : QString()},
+	        {"queue", waiting},
 	        {"lastEventId", double(nextEventId - 1)},
 	        {"events", ev}};
 }
@@ -914,7 +1217,7 @@ void ContestManager::onTaskJudgingFinished() {
 	pushEvent({{"type", "taskFinished"}, {"done", tasksDone}, {"total", tasksTotal}});
 	// Persist intermediate results now and then, like an autosave.
 	if (! lastSave.isValid() || lastSave.msecsTo(QDateTime::currentDateTime()) > 5000)
-		save();
+		saveContest(running.contest);
 }
 
 void ContestManager::onCompileError(int progress, int) { progressValue += progress; }

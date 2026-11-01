@@ -109,9 +109,17 @@ void Contest::deleteTask(int index) {
 	emit taskDeletedForViewer(index);
 }
 
+void Contest::setContestDirectory(const QString &dir) {
+	contestDirectory = dir.isEmpty() ? QString() : QDir::toNativeSeparators(QDir(dir).absolutePath()) + QDir::separator();
+}
+
+QString Contest::dataPath() const { return contestDirectory + Settings::dataPath(); }
+
+QString Contest::sourcePath() const { return contestDirectory + Settings::sourcePath(); }
+
 void Contest::refreshContestantList() {
 	QStringList nameList =
-	    QDir(Settings::sourcePath()).entryList(QStringList(), QDir::Dirs | QDir::NoDotAndDotDot);
+	    QDir(sourcePath()).entryList(QStringList(), QDir::Dirs | QDir::NoDotAndDotDot);
 	QStringList curNameList = contestantList.keys();
 
 	for (int i = 0; i < curNameList.size(); i++) {
@@ -188,6 +196,7 @@ void Contest::judge(const QVector<std::pair<Contestant *, int>> &judgingTasks) {
 		taskJudger->setTask(taskList[i]);
 		taskJudger->setSettings(settings);
 		taskJudger->setContestantName(contestant->getContestantName());
+		taskJudger->setPaths(dataPath(), sourcePath());
 		controller->addTask(taskJudger, contestant, i);
 		contestant->setJudgingTime(QDateTime::currentDateTime());
 	}

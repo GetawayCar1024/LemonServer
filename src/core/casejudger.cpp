@@ -57,6 +57,8 @@ void CaseJudger::setOutputFile(const QString &fileName) { outputFile = fileName;
 
 void CaseJudger::setDiffPath(const QString &path) { diffPath = path; }
 
+void CaseJudger::setDataPath(const QString &path) { dataDir = path; }
+
 void CaseJudger::setTask(const Task *_task) { task = _task; }
 
 void CaseJudger::setFullScore(int score) { fullScore = score; }
@@ -484,7 +486,7 @@ void CaseJudger::lemonSpecialJudge(const QString &fileName) {
 	arguments << inputFile << fileName << outputFile << QString("%1").arg(fullScore);
 	arguments << workingDirectory + "_score";
 	arguments << workingDirectory + "_message";
-	judge.start(Settings::dataPath() + task->getSpecialJudge(), arguments);
+	judge.start((dataDir.isEmpty() ? Settings::dataPath() : dataDir) + task->getSpecialJudge(), arguments);
 
 	if (! judge.waitForStarted(-1)) {
 		score = 0;
@@ -596,7 +598,7 @@ void CaseJudger::testlibSpecialJudge(const QString &fileName) {
 	QStringList arguments;
 	arguments << inputFile << fileName << outputFile;
 	judge.setStandardErrorFile(workingDirectory + "_score");
-	judge.start(Settings::dataPath() + task->getSpecialJudge(), arguments);
+	judge.start((dataDir.isEmpty() ? Settings::dataPath() : dataDir) + task->getSpecialJudge(), arguments);
 
 	if (! judge.waitForStarted(-1)) {
 		score = 0;

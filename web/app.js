@@ -146,7 +146,7 @@ async function api(method, path, body, opt = {}) {
     if (ctype.includes('json')) {
       try {
         const j = await res.json();
-        msg = j.contestRunning ? '比赛中，暂不能查看' : (j.error || msg);
+        msg = j.contestRunning ? '比赛中，暂不能查看' : j.busy ? '该比赛在评测或排队，不能修改' : (j.error || msg);
       } catch (e) { /* ignore */ }
     }
     if (res.status === 401 && !opt.noLoginRedirect) {
@@ -346,6 +346,7 @@ async function boot() {
   if (!S.status.authenticated) return renderLogin();
   if (S.status.setupRequired) return renderSetup();
   route();
+  setInterval(() => { if (S.session && !S.judge.timer && !document.hidden) checkJudgeStatus(); }, 5000);
 }
 
 window.addEventListener('hashchange', () => {
@@ -489,7 +490,8 @@ async function renderContestList() {
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); });
   const items = data.contests.map((c) => h('div', { class: 'list-item' },
     h('div', { class: 'grow', style: { cursor: 'pointer' }, onclick: () => go('#/contest/' + enc(c.name) + '/tasks') },
-      h('div', { class: 'title' }, c.title || c.name, c.current ? h('span', { class: 'pill', style: { marginLeft: '8px' } }, '已打开') : null,
+      h('div', { class: 'title' }, c.title || c.name,
+        c.judging ? h('span', { class: 'pill', style: { marginLeft: '8px' } }, '评测中') : c.queuedJobs ? h('span', { class: 'pill', style: { marginLeft: '8px' } }, '排队中') : null,
         c.startTime != null ? h('span', { style: { marginLeft: '8px' } }, contestTimeLabel(c, true)) : null),
       h('div', { class: 'muted small-text' }, [c.title && c.title !== c.name ? c.name : null, `${c.tasks ?? '-'} 题`, `${c.contestants ?? '-'} 名选手`,
         c.startTime != null ? `${fmtDate(c.startTime)} – ${fmtDate(c.endTime)}` : c.modified].filter(Boolean).join(' · '))),
@@ -683,6 +685,8 @@ async function renderContest(name, tab) {
       }, label))),
       h('button', { class: 'small', onclick: openContestProperties }, '比赛设置'),
       contestTimeLabel(S.contest),
+      S.contest.busy ? h('span', { class: 'busy-bar' }, S.contest.judging ? '评测中，不能修改' : `排队中（${S.contest.queuedJobs} 项），不能修改`,
+        h('button', { class: 'small', onclick: dequeueContest }, '全部出队')) : null,
       h('div', { class: 'path', title: S.contest.directory }, S.contest.directory),
       h('button', { class: 'small hidden', id: 'judge-panel-toggle', onclick: () => { S.judge.panelOpen = true; renderJudgePanel(); } }, '评测日志')),
     h('div', { class: 'contest-body' }, page, h('div', { id: 'judge-panel-slot', style: { display: 'contents' } }))), title);
@@ -766,7 +770,7 @@ function openContestProperties() {
 function renderTasksTab(page) {
   const treeList = h('div', { class: 'tree-list' });
   const editor = h('div', { class: 'editor' });
-  const judging = S.contest.judging;
+  const judging = S.contest.busy; // being judged or queued: no editing
   const noTask = S.sel.task < 0;
   const onCase = S.sel.testCase >= 0;
   page.appendChild(h('div', { class: 'split' },
@@ -911,7 +915,7 @@ async function autoAddTasks() {
 function renderTaskEditor(editor, i) {
   const t = JSON.parse(JSON.stringify(S.contest.tasks[i]));
   const status = h('span', { class: 'status-saved' });
-  const disabled = S.contest.judging;
+  const disabled = S.contest.busy;
   const pending = {};
   const save = debounce(async (patch) => {
     status.textContent = '保存中…';
@@ -1015,7 +1019,7 @@ function renderTestCaseEditor(editor, i, j) {
   const t = S.contest.tasks[i];
   const tc = JSON.parse(JSON.stringify(t.testCases[j]));
   const status = h('span', { class: 'status-saved' });
-  const disabled = S.contest.judging;
+  const disabled = S.contest.busy;
   const save = debounce(async () => {
     status.textContent = '保存中…';
     try {
@@ -1533,7 +1537,7 @@ function computeRanks(contestants) {
 
 function renderResultsTab(page) {
   const c = S.contest;
-  const judging = c.judging;
+  const judging = c.busy; // being judged or queued: no editing (judging can still be queued)
   const exportMenu = h('select', {
     onchange: async (e) => {
       const v = e.target.value;
@@ -1559,16 +1563,16 @@ function renderResultsTab(page) {
     return [...map.entries()].map(([contestant, set]) => ({ contestant, tasks: [...set] }));
   };
 
-  const selBtn = h('button', { class: 'primary', disabled: judging || !S.resultSel.size, onclick: () => startJudge('selected', selectedList()) }, '评测选中');
+  const selBtn = h('button', { class: 'primary', disabled: !S.resultSel.size, onclick: () => startJudge('selected', selectedList()) }, '评测选中');
   const delBtn = h('button', { class: 'danger', disabled: judging || !S.resultSel.size, onclick: () => deleteContestants(selectedList().map((x) => x.contestant)) }, '删除选中');
   if (c.running) return renderRunningResults(page, selBtn, delBtn);
   page.appendChild(h('div', { class: 'toolbar' },
     h('button', { onclick: refreshContestants, disabled: judging }, '刷新选手'),
     h('div', { class: 'sep' }),
     selBtn,
-    h('button', { disabled: judging || !c.contestants.length, onclick: () => startJudge('all') }, '全部'),
-    h('button', { disabled: judging, onclick: () => startJudge('unjudged') }, '未评测'),
-    h('button', { disabled: judging || !c.contestants.length, onclick: (e) => rejudgeByStateMenu(e.currentTarget) }, '按状态重测 ▾'),
+    h('button', { disabled: !c.contestants.length, onclick: () => startJudge('all') }, '全部'),
+    h('button', { onclick: () => startJudge('unjudged') }, '未评测'),
+    h('button', { disabled: !c.contestants.length, onclick: (e) => rejudgeByStateMenu(e.currentTarget) }, '按状态重测 ▾'),
     h('div', { class: 'sep' }),
     delBtn,
     h('button', { disabled: judging, onclick: cleanupFiles }, '整理文件'),
@@ -1584,7 +1588,8 @@ function renderResultsTab(page) {
   const nf = hslOf(theme().nf), ce = hslOf(theme().ce);
   const toggle = (key, el) => {
     if (S.resultSel.has(key)) { S.resultSel.delete(key); el.classList.remove('selected'); } else { S.resultSel.add(key); el.classList.add('selected'); }
-    selBtn.disabled = delBtn.disabled = judging || !S.resultSel.size;
+    selBtn.disabled = !S.resultSel.size;
+    delBtn.disabled = judging || !S.resultSel.size;
   };
   const table = h('table', { class: 'grid results' },
     h('tr', null, h('th', null, '排名'), h('th', null, '选手'), h('th', null, '总分'),
@@ -1628,13 +1633,13 @@ function renderResultsTab(page) {
 // and whether each one has been judged.
 function renderRunningResults(page, selBtn, delBtn) {
   const c = S.contest;
-  const judging = c.judging;
+  const judging = c.busy;
   page.appendChild(h('div', { class: 'toolbar' },
     h('button', { onclick: refreshContestants, disabled: judging }, '刷新选手'),
     h('div', { class: 'sep' }),
     selBtn,
-    h('button', { disabled: judging || !c.contestants.length, onclick: () => startJudge('all') }, '全部'),
-    h('button', { disabled: judging, onclick: () => startJudge('unjudged') }, '未评测'),
+    h('button', { disabled: !c.contestants.length, onclick: () => startJudge('all') }, '全部'),
+    h('button', { onclick: () => startJudge('unjudged') }, '未评测'),
     h('div', { class: 'sep' }),
     delBtn,
     h('button', { disabled: judging, onclick: cleanupFiles }, '整理文件')));
@@ -1644,7 +1649,8 @@ function renderRunningResults(page, selBtn, delBtn) {
   }
   const toggle = (key, el) => {
     if (S.resultSel.has(key)) { S.resultSel.delete(key); el.classList.remove('selected'); } else { S.resultSel.add(key); el.classList.add('selected'); }
-    selBtn.disabled = delBtn.disabled = judging || !S.resultSel.size;
+    selBtn.disabled = !S.resultSel.size;
+    delBtn.disabled = judging || !S.resultSel.size;
   };
   const list = c.contestants.slice().sort((a, b) => lessFileName(a.name, b.name));
   let submitted = 0, judged = 0;
@@ -1744,7 +1750,7 @@ async function showDetail(name, focusTask) {
       det.sourceFile ? h('span', { class: 'muted small-text' }, det.sourceFile) : null,
       h('div', { class: 'right row' },
         t.taskType !== 1 ? h('button', { class: 'small', onclick: () => showSource(name, i) }, '源程序') : null,
-        h('button', { class: 'small', disabled: c.judging, onclick: () => { dlg.close(true); startJudge('selected', [{ contestant: name, tasks: [i] }]); } }, '重测'))));
+        h('button', { class: 'small', onclick: () => { dlg.close(true); startJudge('selected', [{ contestant: name, tasks: [i] }]); } }, '重测'))));
     body.appendChild(sec);
     if (!det.judged) return;
     if (t.taskType !== 1 && det.compileState !== 0) {
@@ -2438,20 +2444,42 @@ async function openEditor(path, isNew, onSaved) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// Judging: progress and log live in a side panel of the contest page (JudgingDialog)
+// Judging: one queue for the whole server. Progress, log and queue live in a side panel (JudgingDialog).
 // ------------------------------------------------------------------------------------------------
+const JOB_MODE = { all: '全部', unjudged: '未评测', selected: '选中', grey: 'NS', magenta: '编译失败', state: '按状态' };
+
 async function startJudge(mode, items, extra = {}) {
   try {
     const st = await api('POST', cpath() + '/judge', { mode, items, ...extra });
-    S.judge.contest = S.contest.name;
-    S.judge.since = st.lastEventId;
-    S.judge.log = st.events.slice();   // a new run starts with a fresh log
+    const job = st.job || {};
+    if (job.position === 0) {
+      // started right away: a fresh log
+      S.judge.since = st.lastEventId;
+      S.judge.log = st.events.slice();
+    } else if (job.position > 0) {
+      toast(`${job.duplicate ? '已在队列中' : '已加入队列'}，第 ${job.position} 位`);
+    }
     S.judge.status = st;
     S.judge.panelOpen = true;
-    S.contest.judging = true;
+    await reloadContest();
     if (location.hash.includes('/contest/')) route(); else renderJudgePanel();
     startJudgePolling();
   } catch (e) { fail(e); }
+}
+
+// Remove every job of the open contest from the queue (stops it if it is being judged).
+async function dequeueContest() {
+  const c = S.contest;
+  if (c.judging && !await confirmDlg('将停止正在进行的评测，已评测的结果会保留。', '全部出队')) return;
+  try {
+    const r = await api('DELETE', cpath() + '/judge');
+    toast(`已出队 ${r.removed} 项`);
+    startJudgePolling();
+  } catch (e) { fail(e); }
+}
+
+async function cancelJob(id) {
+  try { await api('DELETE', '/api/judge-queue/' + id); startJudgePolling(); } catch (e) { fail(e); }
 }
 
 function stopJudgePolling() {
@@ -2467,21 +2495,22 @@ function startJudgePolling() {
 
 async function checkJudgeStatus() {
   try {
-    const list = await api('GET', '/api/contests');
-    if (list.judging && list.current) {
-      if (S.judge.contest !== list.current) { S.judge.contest = list.current; S.judge.since = 0; S.judge.log = []; }
-      if (!S.judge.timer) startJudgePolling();
-    }
+    const list = await api('GET', '/api/contests', undefined, { noLoginRedirect: true });
+    if ((list.judging || (list.queue || []).length) && !S.judge.timer) startJudgePolling();
   } catch (e) { /* ignore */ }
 }
+
+// the open contest is being judged or waiting in the queue
+const contestBusyIn = (st, name) => !!st && ((st.running && st.contest === name) || (st.queue || []).some((j) => j.contest === name));
 
 let pollBusy = false;
 async function pollJudge() {
   if (pollBusy) return;
   pollBusy = true;
   try {
-    const st = await api('GET', cpath(S.judge.contest) + '/judge/status' + qs({ since: S.judge.since }));
+    const st = await api('GET', '/api/judge/status' + qs({ since: S.judge.since }));
     S.judge.status = st;
+    S.judge.contest = st.contest;
     for (const e of st.events) {
       S.judge.since = Math.max(S.judge.since, e.id);
       S.judge.log.push(e);
@@ -2489,19 +2518,23 @@ async function pollJudge() {
     if (S.judge.log.length > 5000) S.judge.log.splice(0, S.judge.log.length - 5000);
     appendJudgeLog(st.events);
     updateJudgeBadge();
-    if (st.events.some((e) => e.type === 'taskFinished') && S.contest && S.contest.name === S.judge.contest && location.hash.includes('/results')) {
+    renderJudgeQueue();
+    const cur = S.contest && location.hash.includes('/contest/') ? S.contest.name : null;
+    if (cur && st.contest === cur && st.events.some((e) => e.type === 'taskFinished' || e.type === 'finished') && location.hash.includes('/results')) {
       refreshResultsQuietly();
+    }
+    // the open contest became busy / editable again
+    if (cur && contestBusyIn(st, cur) !== !!S.contest.busy) {
+      await reloadContest();
+      route();
     }
     if (!st.judging) {
       stopJudgePolling();
-      if (S.contest && S.contest.name === S.judge.contest) {
-        await reloadContest();
-        if (location.hash.includes('/contest/')) route();
-      }
-      toast(st.stopRequested ? '评测已停止' : '评测完成');
+      const fin = S.judge.log.filter((e) => e.type === 'finished').pop();
+      if (fin) toast(fin.stopped ? '评测已停止' : '评测完成');
     }
   } catch (e) {
-    if (e.status === 401) stopJudgePolling();
+    if (e.status === 401) stopJudgePolling(); else console.error(e);
   } finally { pollBusy = false; }
 }
 
@@ -2523,24 +2556,26 @@ function updateJudgeBadge() {
   const b = $('#judge-badge');
   if (!b) return;
   const st = S.judge.status;
-  if (st && st.judging) {
+  const waiting = st ? (st.queue || []).length : 0;
+  if (st && (st.running || waiting)) {
     b.classList.remove('hidden');
-    b.textContent = `评测中 ${st.tasksDone}/${st.tasksTotal}`;
+    b.textContent = (st.running ? `评测中 ${st.tasksDone}/${st.tasksTotal}` : '评测') + (waiting ? ` · 排队 ${waiting}` : '');
   } else b.classList.add('hidden');
   renderJudgeProgress();
 }
 
 function openJudgeDialog() {
-  // badge click: show the side panel of the contest being judged
+  // badge click: show the side panel (on the page of the contest being judged when not on a contest page)
   S.judge.panelOpen = true;
-  if (S.contest && S.contest.name === S.judge.contest && location.hash.includes('/contest/')) renderJudgePanel();
-  else go('#/contest/' + enc(S.judge.contest) + '/results');
+  if (location.hash.includes('/contest/')) renderJudgePanel();
+  else if (S.judge.contest) go('#/contest/' + enc(S.judge.contest) + '/results');
 }
 
 function judgeLine(e) {
   const meta = (s) => h('span', { class: 'meta' }, s);
   switch (e.type) {
-    case 'start': return h('div', { class: 'l1' }, `开始评测 · ${e.tasks} 项`, meta('  ' + (e.time || '')));
+    case 'start': return h('div', { class: 'l1' }, `开始评测 · ${e.contest ? e.contest + ' · ' : ''}${e.tasks} 项`, meta('  ' + (e.time || '')));
+    case 'skipped': return h('div', { class: 'l1 muted' }, `跳过 ${e.contest}：${e.error}`, meta('  ' + (e.time || '')));
     case 'taskStarted': return h('div', { class: 'l2' }, h('b', null, e.contestant || ''), e.contestant ? h('span', { class: 'muted' }, ' · ') : null, e.task);
     case 'case':
       // during the contest time the server leaves out the result of each case
@@ -2560,22 +2595,29 @@ function renderJudgePanel() {
   const slot = $('#judge-panel-slot');
   if (!slot) return;
   slot.innerHTML = '';
-  const show = S.judge.panelOpen && S.contest && S.judge.contest === S.contest.name;
+  const st = S.judge.status;
+  const hasWork = st && (st.running || (st.queue || []).length);
+  const show = S.judge.panelOpen && S.contest;
   const toggle = $('#judge-panel-toggle');
-  if (toggle) toggle.classList.toggle('hidden', show || S.judge.contest !== (S.contest && S.contest.name) || !S.judge.log.length);
+  if (toggle) toggle.classList.toggle('hidden', show || (!S.judge.log.length && !hasWork));
   if (!show) return;
   const log = h('div', { class: 'judge-log', id: 'judge-log' });
   if (!S.judge.log.length) log.appendChild(h('div', { class: 'empty' }, '暂无评测日志'));
   for (const e of S.judge.log) { const l = judgeLine(e); if (l) log.appendChild(l); }
-  const stopBtn = h('button', { class: 'danger', id: 'judge-stop', onclick: async () => { try { await api('POST', cpath(S.judge.contest) + '/judge/stop'); } catch (e) { fail(e); } } }, '停止评测');
+  const stopBtn = h('button', {
+    class: 'danger', id: 'judge-stop',
+    onclick: async () => { try { await api('POST', cpath(S.judge.status.contest) + '/judge/stop'); } catch (e) { fail(e); } },
+  }, '停止评测');
   slot.appendChild(h('div', { class: 'judge-panel' },
     h('div', { class: 'jp-head' }, h('b', null, '评测'), h('span', { class: 'muted small-text', id: 'judge-label' }),
       h('button', { class: 'x', title: '收起', onclick: () => { S.judge.panelOpen = false; renderJudgePanel(); } }, '✕')),
     h('div', { class: 'jp-progress' }, h('div', { class: 'progress' }, h('div', { id: 'judge-bar' }))),
+    h('div', { class: 'jp-queue', id: 'judge-queue' }),
     log,
     h('div', { class: 'jp-foot' }, stopBtn,
       h('button', { class: 'right', onclick: () => { S.judge.log = []; renderJudgePanel(); } }, '清空'))));
   log.scrollTop = log.scrollHeight;
+  renderJudgeQueue();
   renderJudgeProgress();
 }
 
@@ -2590,14 +2632,30 @@ function appendJudgeLog(events) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
+function renderJudgeQueue() {
+  const el = $('#judge-queue');
+  if (!el) return;
+  const st = S.judge.status;
+  const waiting = st ? st.queue || [] : [];
+  el.innerHTML = '';
+  if (!waiting.length) return;
+  el.appendChild(h('div', { class: 'section-title' }, `排队 ${waiting.length}`));
+  for (const j of waiting) {
+    el.appendChild(h('div', { class: 'jq-item' },
+      h('span', { class: 'muted' }, j.position),
+      h('span', { class: 'grow' }, j.contest, h('span', { class: 'muted' }, ' · ' + (JOB_MODE[j.mode] || j.mode))),
+      h('button', { class: 'x', title: '移出队列', onclick: () => cancelJob(j.id) }, '✕')));
+  }
+}
+
 function renderJudgeProgress() {
   const st = S.judge.status;
   const bar = $('#judge-bar'), label = $('#judge-label'), stop = $('#judge-stop');
   if (!bar || !st) { if (stop) stop.disabled = true; return; }
   const pct = st.progressMaximum > 0 ? Math.min(100, (st.progress / st.progressMaximum) * 100) : 0;
-  bar.style.width = (st.judging ? pct : 100) + '%';
-  label.textContent = st.judging ? `${st.tasksDone} / ${st.tasksTotal} · ${pct.toFixed(0)}%` : '已结束';
-  stop.disabled = !st.judging || st.stopRequested;
+  bar.style.width = (st.running ? pct : 100) + '%';
+  label.textContent = st.running ? `${st.contest} · ${st.tasksDone} / ${st.tasksTotal} · ${pct.toFixed(0)}%` : '已结束';
+  stop.disabled = !st.running || st.stopRequested;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2869,10 +2927,13 @@ function renderApiDoc() {
     ['GET · DELETE ' + C + '/contestants/{who}', '详细结果 / 删除（?deleteFiles=1）'],
     ['GET ' + C + '/contestants/{who}/source/{i}', '源程序'],
     ['POST ' + C + '/cleanup', '{"backup":true} 整理文件'],
-    ['POST ' + C + '/judge', '{"mode":"all|unjudged|grey|magenta|selected","items":[{"contestant","tasks":[0]}],"refresh"?:true}；refresh 先刷新选手'],
+    ['POST ' + C + '/judge', '{"mode":"all|unjudged|grey|magenta|state|selected","items":[{"contestant","tasks":[0]}],"refresh"?:true}，加入评测队列，返回 job（position 0 为立即开始）'],
+    ['DELETE ' + C + '/judge', '该比赛的任务全部出队（正在评测的会停止）；评测或排队中的比赛不能修改'],
+    ['GET /api/judge-queue', '评测队列 {"running","queue"}；所有比赛共用一个队列，依次评测'],
+    ['DELETE /api/judge-queue/{id}', '移出队列（正在评测则停止）'],
     ['源程序变更', '通过文件接口修改 source/ 下的提交后，对应格子变为未评测'],
-    ['GET ' + C + '/judge/status?since=N', '进度与 id > N 的事件'],
-    ['POST ' + C + '/judge/stop', '停止评测'],
+    ['GET /api/judge/status?since=N', '当前评测的进度、队列与 id > N 的事件'],
+    ['POST ' + C + '/judge/stop', '停止该比赛正在进行的评测'],
     ['GET ' + C + '/export?format=html|htm|csv', '导出结果；&save=1 保存到比赛文件夹'],
     ['GET ' + C + '/statistics', '统计 HTML'],
     ['文件（root = data | source | contest）', ''],

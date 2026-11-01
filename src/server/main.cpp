@@ -164,7 +164,7 @@ int main(int argc, char *argv[]) {
 	fflush(stdout);
 
 	const int ret = app.exec();
-	manager.close();
+	manager.closeAll();
 	settings.saveSettings();
 	return ret;
 }

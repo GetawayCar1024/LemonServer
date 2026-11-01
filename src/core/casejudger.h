@@ -33,6 +33,7 @@ class CaseJudger {
 	void setInputFile(const QString &);
 	void setOutputFile(const QString &);
 	void setDiffPath(const QString &);
+	void setDataPath(const QString &);
 	void setTask(const Task *);
 	void setFullScore(int);
 	void setTimeLimit(int);
@@ -64,6 +65,8 @@ class CaseJudger {
 	QString inputFile;
 	QString outputFile;
 	QString diffPath;
+	// data/ folder for the special judge; empty: relative to the current directory
+	QString dataDir;
 	const Task *task{};
 	int specialJudgeTimeLimit{};
 	int fullScore{};

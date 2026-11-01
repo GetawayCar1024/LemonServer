@@ -49,7 +49,12 @@ class LemonServer : public QObject {
 	std::optional<QHttpServerResponse> denied(const QHttpServerRequest &req, bool sessionOnly = false) const;
 	// Opens the contest (making it current); on failure returns an error response.
 	std::optional<QHttpServerResponse> withContest(const QString &name, Contest **out);
+	// Something is being judged (settings and compilers are in use).
 	std::optional<QHttpServerResponse> notWhileJudging() const;
+	// The current contest is being judged or waiting in the judging queue: it can be viewed, not changed.
+	std::optional<QHttpServerResponse> notWhileBusy() const;
+	// Judging progress and events; the results are left out while the judged contest is running.
+	QJsonObject judgeStatusJson(qint64 since) const;
 	// During the contest time results and source code of the current contest are hidden.
 	std::optional<QHttpServerResponse> notWhileRunning() const;
 	// abs is (inside) a folder / file that is hidden during the contest, or a folder containing one.

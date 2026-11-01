@@ -33,6 +33,8 @@ class TaskJudger : public QObject {
 	void setSettings(const Settings *);
 	void setTask(const Task *);
 	void setContestantName(QString);
+	// data/ and source/ folders (with a trailing separator); default: relative to the current directory
+	void setPaths(QString data, QString source);
 	CompileState getCompileState() const;
 	// const QList< std::pair<int, int> >& getNeedRejudge() const;
 
@@ -44,6 +46,8 @@ class TaskJudger : public QObject {
 	const Settings *settings{};
 	const Task *task{};
 	QString contestantName;
+	QString dataDir;
+	QString sourceDir;
 	QFuture<void> cancellation;
 	CompileState compileState;
 	QString compileMessage;

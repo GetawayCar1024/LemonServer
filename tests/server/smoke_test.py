@@ -304,4 +304,68 @@ assert r["downZip"] is None, r
 _, r = call("GET", c + "/files" + q(root="contest", path=""), token=key, expect=200)
 assert "down.zip" not in [e["name"] for e in r["entries"]], r
 print("down.zip OK")
+
+# judging queue: one job at a time for the whole server; other contests stay usable meanwhile
+B = "/api/contests/" + urllib.parse.quote("导入测试")
+M = "/api/contests/mycontest"
+
+
+def wait_idle():
+    while call("GET", "/api/judge/status", token=key, expect=200)[1]["judging"]:
+        time.sleep(0.3)
+
+
+_, r = call("POST", c + "/judge", {"mode": "all"}, key, expect=202)
+assert r["job"]["position"] == 0 and r["running"] and r["tasksTotal"] == 7, r["job"]
+job_a = r["job"]["id"]
+# the judged contest can be viewed but not changed
+call("GET", c, token=key, expect=200)
+_, e = call("POST", c + "/tasks", {"problemTitle": "x"}, key, expect=409)
+assert e["busy"], e
+call("PUT", c, {"title": "x"}, key, expect=409)
+call("PUT", "/api/settings", {"maxJudgingThreads": 2}, key, expect=409)  # settings are in use
+# other contests: open, edit, list files while judging (this changes the server's current directory)
+for _ in range(3):
+    _, rb = call("GET", B, token=key, expect=200)
+    assert not rb["busy"], rb
+    call("GET", M + "/files" + q(root="source", path=""), token=key, expect=200)
+_, t = call("POST", M + "/tasks", {"problemTitle": "extra"}, key, expect=201)
+call("DELETE", M + "/tasks/" + str(t["index"]), token=key, expect=200)
+# queue jobs of other contests and of the judged one
+_, r = call("POST", B + "/judge", {"mode": "all"}, key, expect=202)
+assert r["job"]["position"] == 1, r["job"]
+job_b = r["job"]["id"]
+_, r = call("POST", B + "/judge", {"mode": "all"}, key, expect=202)
+assert r["job"]["id"] == job_b and r["job"].get("duplicate"), r["job"]  # same request: not queued twice
+_, r = call("POST", c + "/judge", {"mode": "unjudged"}, key, expect=202)
+assert r["job"]["position"] == 2, r["job"]
+job_a2 = r["job"]["id"]
+_, qu = call("GET", "/api/judge-queue", token=key, expect=200)
+assert qu["running"]["id"] == job_a and [j["id"] for j in qu["queue"]] == [job_b, job_a2], qu
+_, e = call("PUT", B, {"title": "x"}, key, expect=409)  # queued = busy too
+call("DELETE", "/api/judge-queue/" + str(job_a2), token=key, expect=200)
+call("DELETE", "/api/judge-queue/" + str(job_a2), token=key, expect=404)
+call("DELETE", B + "/judge", token=key, expect=200)  # remove all jobs of B: editable again
+_, rb = call("GET", B, token=key, expect=200)
+assert not rb["busy"] and rb["queuedJobs"] == 0, rb
+call("PUT", B, {"title": "导入测试"}, key, expect=200)
+call("POST", B + "/judge", {"mode": "all"}, key, expect=202)
+wait_idle()
+for path in (c, B):  # judged correctly although the current directory kept changing
+    _, r = call("GET", path, token=key, expect=200)
+    sc = {x["name"]: x["totalScore"] for x in r["contestants"]}
+    assert sc["ac"] == 100 and sc["tle"] == 0 and sc["mle"] == 0 and sc["ce"] == 0, (path, sc)
+    assert not r["busy"], r
+assert {x["name"]: x["totalScore"] for x in call("GET", c, token=key)[1]["contestants"]}["wa"] == 75
+# removing the jobs of a contest also stops the one being judged
+call("POST", c + "/judge", {"mode": "all"}, key, expect=202)
+_, r = call("DELETE", c + "/judge", token=key, expect=200)
+assert r["removed"] == 1, r
+wait_idle()
+_, st = call("GET", "/api/judge/status", token=key, expect=200)
+fin = [e for e in st["events"] if e["type"] == "finished"]
+assert fin and fin[-1]["stopped"], st["events"][-3:]
+call("POST", c + "/judge/stop", token=key, expect=409)
+call("PUT", "/api/settings", {}, key, expect=200)
+print("judging queue OK")
 print("ALL OK")
