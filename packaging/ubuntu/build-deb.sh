@@ -33,6 +33,19 @@ chmod 644 "$APP"/lib/*
 patchelf --set-rpath '$ORIGIN/../lib' "$APP/bin/LemonServer"
 for f in "$APP"/lib/*.so*; do patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true; done
 
+# Qt's TLS backends are plugins loaded at run time, so ldd does not see them. Without them QtNetwork
+# logs "qt.network.ssl: No functional TLS backend was found" for every HTTP request. Qt finds them in
+# <prefix>/plugins, the prefix being derived from the location of libQt6Core (/opt/lemonserver).
+# The OpenSSL backend loads the system's libssl.so.3 at run time.
+QT_PLUGINS=${QT_PLUGIN_DIR:-${QT_ROOT_DIR:-}/plugins}
+if ! ls "$QT_PLUGINS"/tls/*.so > /dev/null 2>&1; then
+	echo "Qt TLS plugins not found in $QT_PLUGINS/tls (set QT_PLUGIN_DIR or QT_ROOT_DIR)" >&2
+	exit 1
+fi
+mkdir -p "$APP/plugins/tls"
+install -m644 "$QT_PLUGINS"/tls/*.so "$APP/plugins/tls/"
+for f in "$APP"/plugins/tls/*.so; do patchelf --set-rpath '$ORIGIN/../../lib' "$f"; done
+
 ln -s /opt/lemonserver/bin/LemonServer "$ROOT/usr/bin/lemonserver"
 install -m644 "$HERE/lemonserver.service" "$ROOT/lib/systemd/system/lemonserver.service"
 install -m644 "$SRC/LICENSE" "$ROOT/usr/share/doc/lemonserver/copyright"
@@ -45,7 +58,7 @@ Version: $VERSION
 Architecture: amd64
 Maintainer: heyicong <heyicong.jeremy@gmail.com>
 Installed-Size: $(du -sk "$ROOT/opt" | cut -f1)
-Depends: bubblewrap
+Depends: bubblewrap, libssl3t64 | libssl3
 Recommends: g++
 Suggests: gcc, fpc, python3, default-jdk
 Section: devel
@@ -61,4 +74,4 @@ EOF
 dpkg-deb --root-owner-group -Zxz --build "$ROOT" "$OUT"
 dpkg-deb --info "$OUT"
 echo "Bundled libraries:"
-ls "$APP/lib"
+ls "$APP/lib" "$APP/plugins/tls"

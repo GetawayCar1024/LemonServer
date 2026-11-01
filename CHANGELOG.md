@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- 修复：Ubuntu 安装包缺少 Qt 的 TLS 插件，每个 HTTP 请求都会输出 `qt.network.ssl: No functional TLS backend was found`。现在安装包自带 TLS 插件，并依赖系统的 `libssl3t64` / `libssl3`。
+- 安装测试增加 Ubuntu 26.04。
+
 ## 0.1.1
 
 **下载**

@@ -134,11 +134,11 @@ jobs:
           PKG: ${{ steps.version.outputs.name }}
         run: bash packaging/ubuntu/build-deb.sh build/LemonServer "$VERSION" "$PKG.deb"
 
-      - name: Install test on Ubuntu 22.04 and 24.04
+      - name: Install test on Ubuntu 22.04, 24.04 and 26.04
         env:
           PKG: ${{ steps.version.outputs.name }}
         run: |
-          for img in ubuntu:22.04 ubuntu:24.04; do
+          for img in ubuntu:22.04 ubuntu:24.04 ubuntu:26.04; do
             echo "::group::$img"
             docker run --rm -e PKG -v "$PWD:/w" "$img" bash -ec '
               export DEBIAN_FRONTEND=noninteractive
@@ -149,7 +149,9 @@ jobs:
               sleep 3
               curl -fsS http://127.0.0.1:8099/api/auth/status; echo
               curl -fsS http://127.0.0.1:8099/ | grep -q "<title>LemonServer</title>"
-              dpkg -L lemonserver | grep -q /lib/systemd/system/lemonserver.service'
+              dpkg -L lemonserver | grep -q /lib/systemd/system/lemonserver.service
+              # every request logs "qt.network.ssl: No functional TLS backend" if the TLS plugins are missing
+              if grep -q qt.network /tmp/ls.log; then cat /tmp/ls.log; exit 1; fi'
             echo "::endgroup::"
           done
 

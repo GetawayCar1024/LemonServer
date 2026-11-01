@@ -123,6 +123,25 @@ print("mle results:", d["details"][0]["result"])
 _, d = call("GET", c + "/contestants/ce", token=tok, expect=200)
 assert d["details"][0]["compileState"] == 2
 
+# re-submitting a source through the API makes the cell unjudged again
+call("PUT", c + "/files/upload" + q(root="source", path="wa/aplusb.cpp"), raw=srcs["ac"].encode(), token=tok, expect=200)
+_, r = call("GET", c, token=tok, expect=200)
+wa = next(x for x in r["contestants"] if x["name"] == "wa")
+assert not wa["tasks"][0]["judged"] and wa["totalScore"] == -1, wa
+_, r = call("POST", c + "/judge", {"mode": "unjudged", "refresh": True}, tok, expect=202)
+assert r["tasksTotal"] == 1, r
+while call("GET", c + "/judge/status", token=tok)[1]["judging"]:
+    time.sleep(0.3)
+_, e = call("POST", c + "/judge", {"mode": "unjudged"}, tok, expect=409)
+assert e["nothingToJudge"], e
+call("PUT", c + "/files/upload" + q(root="source", path="wa/aplusb.cpp"), raw=srcs["wa"].encode(), token=tok, expect=200)
+call("POST", c + "/judge", {"mode": "unjudged"}, tok, expect=202)
+while call("GET", c + "/judge/status", token=tok)[1]["judging"]:
+    time.sleep(0.3)
+_, r = call("GET", c, token=tok, expect=200)
+assert next(x for x in r["contestants"] if x["name"] == "wa")["totalScore"] == 75
+print("resubmission OK")
+
 _, html = call("GET", c + "/export" + q(format="html"), token=tok, expect=200)
 assert b"aplusb" in html and "测试比赛".encode() in html
 _, r = call("GET", c + "/export" + q(format="html", save=1), token=tok, expect=200)
