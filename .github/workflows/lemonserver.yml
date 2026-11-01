@@ -150,6 +150,7 @@ jobs:
               curl -fsS http://127.0.0.1:8099/api/auth/status; echo
               curl -fsS http://127.0.0.1:8099/ | grep -q "<title>LemonServer</title>"
               dpkg -L lemonserver | grep -q /lib/systemd/system/lemonserver.service
+              dpkg -L lemonserver | grep -q /usr/share/polkit-1/rules.d/50-lemonserver.rules
               # every request logs "qt.network.ssl: No functional TLS backend" if the TLS plugins are missing
               if grep -q qt.network /tmp/ls.log; then cat /tmp/ls.log; exit 1; fi'
             echo "::endgroup::"

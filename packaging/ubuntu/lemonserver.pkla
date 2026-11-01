@@ -1,0 +1,7 @@
+# Same as lemonserver.rules, for polkit 0.105 (Ubuntu 22.04), which does not read JavaScript rules.
+[LemonServer: keep the system awake while judging]
+Identity=unix-user:lemonserver;unix-group:lemonserver
+Action=org.freedesktop.login1.inhibit-block-sleep
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes

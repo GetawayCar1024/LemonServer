@@ -14,3 +14,5 @@
 *.service text eol=lf
 packaging/ubuntu/postinst text eol=lf
 packaging/ubuntu/postrm text eol=lf
+*.rules text eol=lf
+*.pkla text eol=lf

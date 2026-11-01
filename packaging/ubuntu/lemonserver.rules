@@ -1,0 +1,9 @@
+// LemonServer keeps the system awake while judging (systemd-logind "sleep" inhibitor, as in LemonLime).
+// The service runs without a login session, where polkit would require interactive authentication.
+// Allow it for the lemonserver service account and the members of the lemonserver group.
+polkit.addRule(function (action, subject) {
+	if (action.id == "org.freedesktop.login1.inhibit-block-sleep" &&
+	    (subject.user == "lemonserver" || subject.isInGroup("lemonserver"))) {
+		return polkit.Result.YES;
+	}
+});

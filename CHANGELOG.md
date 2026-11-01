@@ -1,8 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.1.2
 
-- 修复：Ubuntu 安装包缺少 Qt 的 TLS 插件，每个 HTTP 请求都会输出 `qt.network.ssl: No functional TLS backend was found`。现在安装包自带 TLS 插件，并依赖系统的 `libssl3t64` / `libssl3`。
+**下载**
+
+- Windows x64：`LemonServer-0.1.2-windows-x64.zip`，解压后双击 `start-server.bat`。
+- Ubuntu 22.04 / 24.04 / 26.04 x64：`sudo apt install ./lemonserver_0.1.2_ubuntu_amd64.deb`，然后运行 `lemonserver --port 8080`。
+
+**修复（Ubuntu）**
+
+- 安装包缺少 Qt 的 TLS 插件，每个 HTTP 请求都会输出几行 `qt.network.ssl: No functional TLS backend was found`。现在安装包自带 TLS 插件，并依赖系统的 `libssl3t64` / `libssl3`。
+- 作为系统服务运行时，评测期间无法阻止系统休眠，每次评测都会输出 “Failed to prevent system sleep” 警告。安装包现在带有 polkit 规则，允许 `lemonserver` 用户和 `lemonserver` 组成员这样做。
 - 安装测试增加 Ubuntu 26.04。
 
 ## 0.1.1

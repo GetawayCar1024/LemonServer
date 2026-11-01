@@ -39,7 +39,7 @@ LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project
   sudo systemctl enable --now lemonserver                   # 或作为系统服务运行（数据在 /var/lib/lemonserver）
   ```
 
-  程序安装在 `/opt/lemonserver`（自带 Qt 等依赖库），命令为 `lemonserver`。Ubuntu 24.04 默认限制非特权用户命名空间，如果评测时出现“无法启动程序”且日志中提到 bwrap，可执行 `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`。
+  程序安装在 `/opt/lemonserver`（自带 Qt 等依赖库），命令为 `lemonserver`。评测期间会阻止系统休眠：系统服务可以直接做到；通过 SSH 手动运行时，需要先把用户加入 `lemonserver` 组（`sudo usermod -aG lemonserver $USER`，重新登录后生效），否则日志中会有一条 “Failed to prevent system sleep” 警告，不影响评测。Ubuntu 24.04 默认限制非特权用户命名空间，如果评测时出现“无法启动程序”且日志中提到 bwrap，可执行 `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`。
 
 服务器上还需要安装选手程序所用的编译器（如 g++、python3），首次启动会自动检测。
 

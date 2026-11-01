@@ -48,6 +48,10 @@ for f in "$APP"/plugins/tls/*.so; do patchelf --set-rpath '$ORIGIN/../../lib' "$
 
 ln -s /opt/lemonserver/bin/LemonServer "$ROOT/usr/bin/lemonserver"
 install -m644 "$HERE/lemonserver.service" "$ROOT/lib/systemd/system/lemonserver.service"
+# let the service keep the system awake while judging: JavaScript rule for polkit >= 0.106
+# (Ubuntu 24.04 and later), .pkla for polkit 0.105 (Ubuntu 22.04)
+install -Dm644 "$HERE/lemonserver.rules" "$ROOT/usr/share/polkit-1/rules.d/50-lemonserver.rules"
+install -Dm644 "$HERE/lemonserver.pkla" "$ROOT/var/lib/polkit-1/localauthority/10-vendor.d/50-lemonserver.pkla"
 install -m644 "$SRC/LICENSE" "$ROOT/usr/share/doc/lemonserver/copyright"
 install -m644 "$SRC/README.md" "$ROOT/usr/share/doc/lemonserver/README.md"
 install -m755 "$HERE/postinst" "$HERE/postrm" "$ROOT/DEBIAN/"
