@@ -7,10 +7,13 @@
  */
 
 #include <cassert>
+#include <cerrno>
+#include <climits>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <sstream>
 #include <string>
 #include <sys/fcntl.h>
@@ -31,6 +34,16 @@ extern void initWatcher();
 extern ssize_t calculateStaticMemoryUsage(const std::string &);
 extern ssize_t getMemoryRLimit(ssize_t memoryLimitInMB);
 extern size_t getMaxRSSInByte(long ru_maxrss);
+// user CPU time (ms) of a running child process, -1 if unknown
+extern long long getUserTimeMs(pid_t pid);
+
+static void onTick(int /*dummy*/) {}
+
+static long long elapsedMs(const timespec &since) {
+	timespec now{};
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (now.tv_sec - since.tv_sec) * 1000LL + (now.tv_nsec - since.tv_nsec) / 1000000;
+}
 
 enum : int {
 	RS_AC = 0,
@@ -52,11 +65,16 @@ enum : int {
  * argv[9]: 原始（未经语言设置缩放的）空间限制（MiB）
  * argv[10]: 选手程序只读的文件
  * argv[11]: 选手程序只写的文件
+ * argv[12]（可选）: 用户态 CPU 时间超过它（毫秒）时结束选手程序
+ * argv[13]（可选）: 实际经过的时间超过它（毫秒）时结束选手程序
+ *
+ * 评测以用户态 CPU 时间为准（即输出的时间）。不给出 argv[12] 时与原来一样，只用 RLIMIT_CPU
+ * （它计入内核态时间，只能精确到秒）结束超时的程序。
  */
 auto main(int argc, char *argv[]) -> int {
-	if (argc != 12) {
+	if (argc != 12 && argc != 14) {
 		printf("-1\n-1\n");
-		fprintf(stderr, "Expected 11 arguments, found %d\n", argc);
+		fprintf(stderr, "Expected 11 or 13 arguments, found %d\n", argc - 1);
 		return RS_FAIL;
 	}
 	std::string fileName = argv[1];
@@ -70,6 +88,9 @@ auto main(int argc, char *argv[]) -> int {
 	[[maybe_unused]] long long rawMemoryLimitMib = std::stoll(argv[9]);
 	[[maybe_unused]] std::string readableFile = argv[10];
 	[[maybe_unused]] std::string writableFile = argv[11];
+	const bool watched = argc == 14;
+	const long long cpuKillMs = watched ? std::stoll(argv[12]) : LLONG_MAX;
+	const long long wallKillMs = watched ? std::stoll(argv[13]) : LLONG_MAX;
 
 	initWatcher();
 
@@ -106,11 +127,38 @@ auto main(int argc, char *argv[]) -> int {
 		signal(SIGTERM, cleanUp);
 		struct rusage usage{};
 		int status = 0;
+		timespec start{};
+		clock_gettime(CLOCK_MONOTONIC, &start);
+		bool killed = false;
+		if (watched) {
+			// interrupt wait4() every 10 ms to look at the time used (no SA_RESTART)
+			struct sigaction tick{};
+			tick.sa_handler = onTick;
+			sigaction(SIGALRM, &tick, NULL);
+			itimerval interval{{0, 10000}, {0, 10000}};
+			setitimer(ITIMER_REAL, &interval, NULL);
+		}
 
-		if (wait4(pid, &status, 0, &usage) == -1) {
-			printf("-1\n-1\n");
-			perror("wait4");
-			return RS_FAIL;
+		for (;;) {
+			if (wait4(pid, &status, 0, &usage) == pid)
+				break;
+			if (errno != EINTR) {
+				printf("-1\n-1\n");
+				perror("wait4");
+				return RS_FAIL;
+			}
+			if (watched && ! killed && (getUserTimeMs(pid) > cpuKillMs || elapsedMs(start) > wallKillMs)) {
+				kill(pid, SIGKILL);
+				killed = true;
+			}
+		}
+
+		if (killed) {
+			long long timeUsedMs =
+			    static_cast<long long>(usage.ru_utime.tv_sec * 1000 + usage.ru_utime.tv_usec / 1000);
+			// over the CPU time limit: show by how much; stopped after waiting: no meaningful time
+			printf("%lld\n-1\n", timeUsedMs > cpuKillMs ? timeUsedMs : -1LL);
+			return RS_TLE;
 		}
 
 		if (WIFEXITED(status)) {
@@ -134,10 +182,12 @@ auto main(int argc, char *argv[]) -> int {
 		if (WIFSIGNALED(status)) {
 			long long timeUsedMs =
 			    static_cast<long long>(usage.ru_utime.tv_sec * 1000 + usage.ru_utime.tv_usec / 1000);
-			printf("%lld\n-1\n", timeUsedMs);
 			if (WTERMSIG(status) == SIGXCPU) {
+				// RLIMIT_CPU includes system time: a time within the limit would contradict the verdict
+				printf("%lld\n-1\n", timeUsedMs > timeLimitMs ? timeUsedMs : -1LL);
 				return RS_TLE;
 			}
+			printf("%lld\n-1\n", timeUsedMs);
 			if (WTERMSIG(status) == SIGKILL || WTERMSIG(status) == SIGABRT) {
 				return RS_MLE;
 			}
@@ -171,8 +221,9 @@ auto main(int argc, char *argv[]) -> int {
 			stalim = (rlimit){(rlim_t)2147483647LL, (rlim_t)2147483647LL};
 		}
 
-		// Calculate time limit in seconds, rounding up
-		rlim_t soft_time_limit_sec = (timeLimitMs + 999) / 1000;
+		// Calculate time limit in seconds, rounding up. When the parent watches the user time, RLIMIT_CPU
+		// only backs it up, for programs that spend their time in the kernel.
+		rlim_t soft_time_limit_sec = ((watched ? wallKillMs : timeLimitMs) + 999) / 1000;
 		timlim = (rlimit){soft_time_limit_sec, soft_time_limit_sec + 1}; // Soft limit + 1 for hard limit
 
 		setrlimit(RLIMIT_AS, &memlim);

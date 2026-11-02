@@ -787,8 +787,10 @@ void CaseJudger::judgeTraditionalTask() {
 	message = runResult.message;
 
 	if (timeUsed > timeLimit) {
-		if (score > 0 &&
-		    (timeUsed <= timeLimit * (1 + extraTimeRatio) || timeUsed <= timeLimit + 1000 * extraTimeRatio)) {
+		// ended by itself a little over the limit (it may have been slowed down): judge it again, at most
+		// Settings::getRejudgeTimes() times
+		if ((result == CorrectAnswer || result == TimeLimitExceeded) &&
+		    timeUsed <= ProcessRunner::rejudgeTimeLimit(timeLimit, extraTimeRatio)) {
 			needRejudge = true;
 		}
 		score = 0;

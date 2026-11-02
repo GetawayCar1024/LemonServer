@@ -128,6 +128,9 @@ jobs:
             -DLEMON_BUILD_INFO="LemonServer for Ubuntu" -DLEMON_BUILD_EXTRA_INFO="GitHub Actions ${{ github.sha }}"
           cmake --build build --target LemonServer --parallel
 
+      - name: Watcher test
+        run: bash tests/watcher/run.sh
+
       - name: Build .deb
         env:
           VERSION: ${{ steps.version.outputs.version }}

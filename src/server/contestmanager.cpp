@@ -85,17 +85,6 @@ namespace {
 				return false;
 		return true;
 	}
-
-	QDateTime readTime(const QJsonObject &obj, const char *key) {
-		return QDateTime::fromString(obj[key].toString(), Qt::ISODateWithMs);
-	}
-
-	bool runningBetween(const QDateTime &start, const QDateTime &end) {
-		const auto now = QDateTime::currentDateTimeUtc();
-		return start.isValid() && end.isValid() && start <= now && now < end;
-	}
-
-	QJsonValue msOrNull(const QDateTime &t) { return t.isValid() ? QJsonValue(double(t.toMSecsSinceEpoch())) : QJsonValue(); }
 } // namespace
 
 ContestManager::ContestManager(Settings *settings, ServerConfig *config, QObject *parent)
@@ -140,15 +129,11 @@ QJsonArray ContestManager::listContests() const {
 			continue;
 		const auto props =
 		    loaded.contains(name) ? loaded.value(name).properties : readProperties(root.absoluteFilePath(name));
-		const auto start = readTime(props, "startTime"), end = readTime(props, "endTime");
 		QJsonObject item{{"name", name}, {"cdf", QFileInfo(cdf).fileName()},
 		                 {"modified", QFileInfo(cdf).lastModified().toString("yyyy-MM-dd hh:mm:ss")},
 		                 {"judging", judging && running.contest == name},
 		                 {"queuedJobs", queuedJobs(name)},
 		                 {"busy", isBusy(name)},
-		                 {"startTime", msOrNull(start)},
-		                 {"endTime", msOrNull(end)},
-		                 {"running", runningBetween(start, end)},
 		                 {"downZip", props["downZip"].toString()}};
 		QFile f(cdf);
 		if (f.open(QFile::ReadOnly)) {
@@ -293,7 +278,7 @@ bool ContestManager::cloneContest(const QString &from, const QString &to, const 
 	out.write(QJsonDocument(cdf).toJson(QJsonDocument::Compact));
 	if (! out.commit())
 		return fail(tr("Cannot write file %1").arg(to + ".cdf"));
-	// LemonServer's properties: keep down.zip (if it was copied), not the contest time
+	// LemonServer's properties: keep down.zip (if it was copied)
 	const QString down = src.properties["downZip"].toString();
 	if (! down.isEmpty() && QFileInfo(dst.filePath(down)).isFile()) {
 		QSaveFile props(dst.filePath(kPropertiesFile));
@@ -529,7 +514,11 @@ QJsonObject ContestManager::readProperties(const QString &dir) {
 	QFile f(QDir(dir).absoluteFilePath(kPropertiesFile));
 	if (! f.open(QFile::ReadOnly))
 		return {};
-	return QJsonDocument::fromJson(f.readAll()).object();
+	auto props = QJsonDocument::fromJson(f.readAll()).object();
+	// the contest time of LemonServer 0.1.5 and earlier is no longer used
+	props.remove("startTime");
+	props.remove("endTime");
+	return props;
 }
 
 bool ContestManager::writeProperties(QString *error) {
@@ -543,50 +532,7 @@ bool ContestManager::writeProperties(QString *error) {
 	return false;
 }
 
-QDateTime ContestManager::startTime() const { return readTime(props(), "startTime"); }
-
-QDateTime ContestManager::endTime() const { return readTime(props(), "endTime"); }
-
-bool ContestManager::isContestRunning() const { return contest && runningBetween(startTime(), endTime()); }
-
-bool ContestManager::isContestRunning(const QString &name) const {
-	const auto p = loaded.contains(name) ? loaded.value(name).properties : readProperties(contestDir(name));
-	return runningBetween(readTime(p, "startTime"), readTime(p, "endTime"));
-}
-
 QString ContestManager::downZip() const { return props()["downZip"].toString(); }
-
-bool ContestManager::setContestTime(const QDateTime &start, const QDateTime &end, QString *error) {
-	if (! contest) {
-		*error = tr("No contest yet");
-		return false;
-	}
-	if (start == startTime() && end == endTime())
-		return true;
-	if (endTime().isValid() && QDateTime::currentDateTimeUtc() >= endTime()) {
-		*error = tr("The contest has ended, its time can no longer be changed");
-		return false;
-	}
-	if (start.isValid() != end.isValid()) {
-		*error = tr("Set both the start and the end time, or neither");
-		return false;
-	}
-	if (start.isValid() && end <= start) {
-		*error = tr("The end time must be later than the start time");
-		return false;
-	}
-	auto &properties = loaded[contestName].properties;
-	if (start.isValid()) {
-		properties["startTime"] = start.toUTC().toString(Qt::ISODateWithMs);
-		properties["endTime"] = end.toUTC().toString(Qt::ISODateWithMs);
-	} else {
-		properties.remove("startTime");
-		properties.remove("endTime");
-	}
-	LOG("Contest time of", contestName, start.isValid() ? start.toString(Qt::ISODate) + " - " + end.toString(Qt::ISODate)
-	                                                     : QString("cleared"));
-	return writeProperties(error);
-}
 
 bool ContestManager::setDownZip(const QString &relativePath, QString *error) {
 	if (! contest) {
@@ -620,11 +566,7 @@ QJsonObject ContestManager::propertiesJson() const {
 		                   {"size", double(fi.isFile() ? fi.size() : 0)},
 		                   {"modified", fi.isFile() ? fi.lastModified().toString("yyyy-MM-dd hh:mm:ss") : QString()}};
 	}
-	return {{"startTime", msOrNull(startTime())},
-	        {"endTime", msOrNull(endTime())},
-	        {"running", isContestRunning()},
-	        {"serverTime", double(QDateTime::currentMSecsSinceEpoch())},
-	        {"downZip", down}};
+	return {{"downZip", down}};
 }
 
 bool ContestManager::save(QString *error) { return contest && saveContest(contestName, error); }

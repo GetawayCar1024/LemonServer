@@ -13,6 +13,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
+#include <libproc.h>
+#include <mach/mach_time.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
 #include <mach-o/utils.h>
@@ -146,3 +148,17 @@ ssize_t calculateStaticMemoryUsage(const std::string &fileName) {
 ssize_t getMemoryRLimit(ssize_t memoryLimitInMB) { return memoryLimitInMB * 1024 * (isAppleSilicon ? 4 : 1); }
 
 size_t getMaxRSSInByte(long ru_maxrss) { return ru_maxrss / (isAppleSilicon ? 4 : 1); }
+
+long long getUserTimeMs(pid_t pid) {
+	rusage_info_v2 info{};
+	if (proc_pid_rusage(pid, RUSAGE_INFO_V2, reinterpret_cast<rusage_info_t *>(&info)) != 0) {
+		return -1;
+	}
+	// in Mach absolute time units, which are not nanoseconds on Apple Silicon
+	static const mach_timebase_info_data_t timebase = [] {
+		mach_timebase_info_data_t value{};
+		mach_timebase_info(&value);
+		return value;
+	}();
+	return static_cast<long long>(info.ri_user_time * timebase.numer / timebase.denom / 1000000);
+}

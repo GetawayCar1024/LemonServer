@@ -96,3 +96,25 @@ ssize_t calculateStaticMemoryUsage(const std::string &fileName) {
 ssize_t getMemoryRLimit(ssize_t memoryLimitInMB) { return memoryLimitInMB * 1024 * 1024; }
 
 size_t getMaxRSSInByte(long ru_maxrss) { return ru_maxrss * 1024; }
+
+long long getUserTimeMs(pid_t pid) {
+	char path[64];
+	snprintf(path, sizeof(path), "/proc/%d/stat", static_cast<int>(pid));
+	FILE *file = fopen(path, "r");
+	if (file == NULL) {
+		return -1;
+	}
+	char buffer[1024];
+	const size_t length = fread(buffer, 1, sizeof(buffer) - 1, file);
+	fclose(file);
+	buffer[length] = '\0';
+	// the command name in parentheses may contain spaces; utime is the 12th field after it
+	const char *rest = strrchr(buffer, ')');
+	unsigned long long ticks = 0;
+	if (rest == NULL ||
+	    sscanf(rest + 1, " %*c %*d %*d %*d %*d %*d %*u %*lu %*lu %*lu %*lu %llu", &ticks) != 1) {
+		return -1;
+	}
+	static const long ticksPerSecond = sysconf(_SC_CLK_TCK);
+	return static_cast<long long>(ticks * 1000 / ticksPerSecond);
+}

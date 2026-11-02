@@ -7,6 +7,8 @@
 
 #include "processrunner.h"
 
+#include <QtMath>
+
 #ifdef Q_OS_WIN32
 #include "processrunner_win.h"
 #else
@@ -23,4 +25,12 @@ auto ProcessRunner::create(ProcessRunnerConfig config, QFuture<void> cancellatio
 #else
 	return std::make_unique<UnixProcessRunner>(std::move(config), std::move(cancellation));
 #endif
+}
+
+auto ProcessRunner::rejudgeTimeLimit(int timeLimit, double extraTimeRatio) -> int {
+	return qFloor(qMax(timeLimit * (1 + extraTimeRatio), timeLimit + 1000 * extraTimeRatio) + 1e-6);
+}
+
+auto ProcessRunner::wallTimeLimit(const ProcessRunnerConfig &config) -> int {
+	return rejudgeTimeLimit(config.timeLimit, config.extraTimeRatio) * 2 + 1000;
 }

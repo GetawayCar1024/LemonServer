@@ -60,6 +60,14 @@ class ProcessRunner {
 
 	static std::unique_ptr<ProcessRunner> create(ProcessRunnerConfig config, QFuture<void> cancellation);
 
+	// A run is judged by its user CPU time, the time shown in the results. A run that is over the limit by
+	// at most this much (ms, it may have been slowed down) is judged again, see CaseJudger.
+	static auto rejudgeTimeLimit(int timeLimit, double extraTimeRatio) -> int;
+	// A running program is stopped once its user CPU time exceeds rejudgeTimeLimit() (it cannot pass any
+	// more), or after this much real time (ms; a program that waits). Starting the program, reading and
+	// writing files or other judging threads must not turn into a time limit exceeded.
+	static auto wallTimeLimit(const ProcessRunnerConfig &config) -> int;
+
   protected:
 	ProcessRunnerConfig config;
 	QFuture<void> cancellation;

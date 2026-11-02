@@ -53,12 +53,6 @@ class LemonServer : public QObject {
 	std::optional<QHttpServerResponse> notWhileJudging() const;
 	// The current contest is being judged or waiting in the judging queue: it can be viewed, not changed.
 	std::optional<QHttpServerResponse> notWhileBusy() const;
-	// Judging progress and events; the results are left out while the judged contest is running.
-	QJsonObject judgeStatusJson(qint64 since) const;
-	// During the contest time results and source code of the current contest are hidden.
-	std::optional<QHttpServerResponse> notWhileRunning() const;
-	// abs is (inside) a folder / file that is hidden during the contest, or a folder containing one.
-	bool touchesHidden(const QString &abs) const;
 	// The .cdf and lemonserver.json are managed by the server, not through the file system API.
 	bool isReservedFile(const QString &abs) const;
 	// abs was written / removed: if it is a submission under source/, mark the results outdated.

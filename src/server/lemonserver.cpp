@@ -337,35 +337,6 @@ std::optional<QHttpServerResponse> LemonServer::notWhileBusy() const {
 	return std::nullopt;
 }
 
-QJsonObject LemonServer::judgeStatusJson(qint64 since) const {
-	auto status = manager->judgeStatus(since);
-	const QString judged = status["contest"].toString();
-	if (! judged.isEmpty() && manager->isContestRunning(judged)) {
-		// During the contest only the overall progress of the job is shown: no results, and not which
-		// submissions are being judged either (only the start / end of the job).
-		static const QSet<QString> kept{"start", "finished", "stopping", "skipped"};
-		QJsonArray events;
-		for (const auto &v : status["events"].toArray())
-			if (kept.contains(v.toObject()["type"].toString()))
-				events.append(v);
-		status["events"] = events;
-		status.remove("tasksDone");
-		status.remove("tasksTotal");
-		status["contestRunning"] = true;
-	}
-	return status;
-}
-
-std::optional<QHttpServerResponse> LemonServer::notWhileRunning() const {
-	if (manager->isContestRunning())
-		return QHttpServerResponse(
-		    QJsonObject{{"error", tr("The contest is running: results and source code are hidden until %1")
-		                              .arg(manager->endTime().toLocalTime().toString("yyyy-MM-dd hh:mm"))},
-		                {"contestRunning", true}},
-		    Status::Forbidden);
-	return std::nullopt;
-}
-
 namespace {
 #ifdef Q_OS_WIN
 	constexpr auto kPathCase = Qt::CaseInsensitive;
@@ -376,19 +347,6 @@ namespace {
 		return path.compare(dir, kPathCase) == 0 || path.startsWith(dir + "/", kPathCase);
 	}
 } // namespace
-
-bool LemonServer::touchesHidden(const QString &abs) const {
-	if (! manager->isContestRunning())
-		return false;
-	const QDir dir(manager->currentDir());
-	QStringList hidden{QDir::cleanPath(dir.absoluteFilePath("source")), QDir::cleanPath(manager->currentCdfPath())};
-	for (const auto &bak : dir.entryList({"source_bak_*"}, QDir::Dirs | QDir::NoDotAndDotDot))
-		hidden.append(QDir::cleanPath(dir.absoluteFilePath(bak)));
-	for (const auto &h : hidden)
-		if (sameOrInside(abs, h) || sameOrInside(h, abs))
-			return true;
-	return false;
-}
 
 bool LemonServer::isReservedFile(const QString &abs) const {
 	return abs.compare(QDir::cleanPath(manager->currentCdfPath()), kPathCase) == 0 ||
@@ -446,9 +404,6 @@ QStringList LemonServer::submissionFiles(Contest *contest, Contestant *ct, int i
 }
 
 QJsonObject LemonServer::contestantJson(Contest *contest, Contestant *ct) const {
-	const bool hide = manager->isContestRunning();
-	// while it is also being judged, not even which submissions are judged already
-	const bool hideJudged = hide && manager->judgingContest() == manager->currentName();
 	auto obj = contestantSummary(contest, ct);
 	QJsonArray tasks = obj["tasks"].toArray();
 	for (int i = 0; i < tasks.size(); i++) {
@@ -459,21 +414,9 @@ QJsonObject LemonServer::contestantJson(Contest *contest, Contestant *ct) const 
 			size += QFileInfo(f).size();
 		t["submitted"] = ! files.isEmpty();
 		t["codeSize"] = files.isEmpty() ? QJsonValue() : QJsonValue(double(size));
-		if (hide) {
-			t.remove("score");
-			t.remove("compileState");
-		}
-		if (hideJudged)
-			t.remove("judged");
 		tasks[i] = t;
 	}
 	obj["tasks"] = tasks;
-	if (hide) {
-		obj.remove("totalScore");
-		obj.remove("totalUsedTime");
-	}
-	if (hideJudged)
-		obj.remove("judgingTime");
 	return obj;
 }
 
@@ -1008,8 +951,6 @@ void LemonServer::setupTestlibRoutes() {
 		    QString src, base, error;
 		    if (! resolvePath(manager->currentDir(), root, body["path"].toString(), &src, &base, &error))
 			    return ready(errorResponse(Status::BadRequest, error));
-		    if (touchesHidden(src))
-			    return ready(std::move(*notWhileRunning()));
 		    const QFileInfo srcInfo(src);
 		    if (! srcInfo.isFile())
 			    return ready(errorResponse(Status::NotFound, tr("File not found")));
@@ -1137,20 +1078,10 @@ void LemonServer::setupContestRoutes() {
 		const auto body = parseBody(req, &ok);
 		if (! ok)
 			return errorResponse(Status::BadRequest, "invalid JSON");
-		if (! body.isEmpty())
+		// "startTime" / "endTime" (the contest time of 0.1.5 and earlier) are ignored
+		if (body.contains("downZip") || body.contains("title"))
 			if (auto r = notWhileBusy())
 				return std::move(*r);
-		if (body.contains("startTime") || body.contains("endTime")) {
-			// milliseconds since the epoch or an ISO 8601 string; null / "" clears the contest time
-			const auto parseTime = [](const QJsonValue &v) {
-				if (v.isDouble())
-					return QDateTime::fromMSecsSinceEpoch(qint64(v.toDouble()), QTimeZone::UTC);
-				return QDateTime::fromString(v.toString(), Qt::ISODateWithMs);
-			};
-			QString error;
-			if (! manager->setContestTime(parseTime(body["startTime"]), parseTime(body["endTime"]), &error))
-				return errorResponse(Status::BadRequest, error);
-		}
 		if (body.contains("downZip")) {
 			QString error;
 			if (! manager->setDownZip(body["downZip"].toString(), &error))
@@ -1430,8 +1361,6 @@ void LemonServer::setupContestRoutes() {
 		             Contestant *ct = c->getContestant(who);
 		             if (! ct)
 			             return errorResponse(Status::NotFound, "no such contestant");
-		             if (auto r = notWhileRunning())
-			             return std::move(*r);
 		             auto obj = contestantJson(c, ct);
 		             QJsonArray details;
 		             for (int i = 0; i < c->getTaskList().size(); i++)
@@ -1469,8 +1398,6 @@ void LemonServer::setupContestRoutes() {
 		             Contestant *ct = c->getContestant(who);
 		             if (! ct || ! c->getTask(index))
 			             return errorResponse(Status::NotFound, "not found");
-		             if (auto r = notWhileRunning())
-			             return std::move(*r);
 		             QJsonArray files;
 		             for (const auto &path : submissionFiles(c, ct, index)) {
 			             QFile f(path);
@@ -1495,10 +1422,6 @@ void LemonServer::setupContestRoutes() {
 		             if (! ok)
 			             return errorResponse(Status::BadRequest, "invalid JSON");
 		             const QString mode = body["mode"].toString("all");
-		             // choosing cells by their result would reveal the results
-		             if (mode != "all" && mode != "unjudged" && mode != "selected")
-			             if (auto r = notWhileRunning())
-				             return std::move(*r);
 		             QJsonObject request{{"mode", mode}};
 		             for (const char *key : {"items", "compileStates", "resultStates", "refresh"})
 			             if (body.contains(key))
@@ -1509,7 +1432,7 @@ void LemonServer::setupContestRoutes() {
 		             if (! manager->enqueueJudge(request, &job, &error, &nothingToJudge))
 			             return QHttpServerResponse(QJsonObject{{"error", error}, {"nothingToJudge", nothingToJudge}},
 			                                        nothingToJudge ? Status::Conflict : Status::BadRequest);
-		             auto status = judgeStatusJson(0);
+		             auto status = manager->judgeStatus(0);
 		             status["job"] = job;
 		             return jsonResponse(status, Status::Accepted);
 	             });
@@ -1529,8 +1452,6 @@ void LemonServer::setupContestRoutes() {
 			             return std::move(*r);
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
-			             return std::move(*r);
-		             if (auto r = notWhileRunning())
 			             return std::move(*r);
 		             QMap<int, int> compileCount, resultCount;
 		             int unjudged = 0;
@@ -1572,27 +1493,19 @@ void LemonServer::setupContestRoutes() {
 	server.route("/api/contests/<arg>/judge/status", Method::Get, [this](const QString &, const QHttpServerRequest &req) {
 		if (auto r = denied(req))
 			return std::move(*r);
-		return jsonResponse(judgeStatusJson(queryValue(req, "since").toLongLong()));
+		return jsonResponse(manager->judgeStatus(queryValue(req, "since").toLongLong()));
 	});
 	server.route("/api/judge/status", Method::Get, [this](const QHttpServerRequest &req) {
 		if (auto r = denied(req))
 			return std::move(*r);
-		return jsonResponse(judgeStatusJson(queryValue(req, "since").toLongLong()));
+		return jsonResponse(manager->judgeStatus(queryValue(req, "since").toLongLong()));
 	});
 
 	// The judging queue of the whole server: {"running": job | null, "queue": [jobs]}
 	server.route("/api/judge-queue", Method::Get, [this](const QHttpServerRequest &req) {
 		if (auto r = denied(req))
 			return std::move(*r);
-		auto queue = manager->queueJson();
-		auto running = queue["running"].toObject();
-		if (! running.isEmpty() && manager->isContestRunning(running["contest"].toString())) {
-			// during the contest only the overall progress (see judgeStatusJson)
-			running.remove("tasksDone");
-			running.remove("tasksTotal");
-			queue["running"] = running;
-		}
-		return jsonResponse(queue);
+		return jsonResponse(manager->queueJson());
 	});
 	server.route("/api/judge-queue/<arg>", Method::Delete, [this](qint64 id, const QHttpServerRequest &req) {
 		if (auto r = denied(req))
@@ -1610,8 +1523,6 @@ void LemonServer::setupContestRoutes() {
 			             return std::move(*r);
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
-			             return std::move(*r);
-		             if (auto r = notWhileRunning())
 			             return std::move(*r);
 		             // ExportUtil::exportResult()
 		             if (c->getContestantList().isEmpty())
@@ -1652,8 +1563,6 @@ void LemonServer::setupContestRoutes() {
 			             return std::move(*r);
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
-			             return std::move(*r);
-		             if (auto r = notWhileRunning())
 			             return std::move(*r);
 		             const QString html = StatisticsUtil::generateHtml(c);
 		             if (queryFlag(req, "download"))
@@ -1713,8 +1622,6 @@ void LemonServer::setupFileRoutes() {
 		             if (! resolvePath(manager->currentDir(), queryValue(req, "root"), queryValue(req, "path"),
 		                               &abs, nullptr, &error))
 			             return errorResponse(Status::BadRequest, error);
-		             if (touchesHidden(abs))
-			             return std::move(*notWhileRunning());
 		             QFileInfo fi(abs);
 		             if (fi.isDir()) {
 			             // zip the whole folder
@@ -1939,8 +1846,6 @@ void LemonServer::setupFileRoutes() {
 					             return errorResponse(Status::BadRequest, tr("Not found: %1").arg(p.toString()));
 				             if (! copy && isReservedFile(src))
 					             return errorResponse(Status::BadRequest, tr("The contest file cannot be moved"));
-				             if (touchesHidden(src))
-					             return std::move(*notWhileRunning());
 				             if (dest == src || dest.startsWith(src + "/"))
 					             return errorResponse(Status::BadRequest,
 					                                  tr("Cannot put %1 into itself").arg(fi.fileName()));
@@ -1987,8 +1892,6 @@ void LemonServer::setupFileRoutes() {
 		             if (from == base || ! QFileInfo::exists(from) || QFileInfo::exists(to) || isReservedFile(from) ||
 		                 isReservedFile(to))
 			             return errorResponse(Status::BadRequest, tr("Cannot rename"));
-		             if (touchesHidden(from))
-			             return std::move(*notWhileRunning());
 		             QDir().mkpath(QFileInfo(to).absolutePath());
 		             if (! QDir().rename(from, to))
 			             return errorResponse(Status::InternalServerError, tr("Cannot rename"));

@@ -234,53 +234,18 @@ c = "/api/contests/" + urllib.parse.quote(CONTEST)
 _, z = call("GET", c + "/files/download" + q(root="data", path="aplusb"), token=key, expect=200)
 assert {"1.in", "4.out", "chk.cpp"} <= set(zipfile.ZipFile(io.BytesIO(z)).namelist())
 
-# contest time: during it scores, details, source code, export and statistics are hidden
+# no contest time since 0.1.6: the old fields are ignored and the results are always visible
 now = int(time.time() * 1000)
-call("PUT", c, {"startTime": now - 60000, "endTime": now - 120000}, key, expect=400)
-call("PUT", c, {"startTime": now - 60000, "endTime": None}, key, expect=400)
 _, r = call("PUT", c, {"startTime": now - 60000, "endTime": now + 3600000}, key, expect=200)
-assert r["running"] and r["startTime"] == now - 60000, r
+assert "startTime" not in r and "running" not in r, r
 ac = next(x for x in r["contestants"] if x["name"] == "ac")
-assert "totalScore" not in ac and "score" not in ac["tasks"][0] and "compileState" not in ac["tasks"][0], ac
-assert ac["tasks"][0]["submitted"] and ac["tasks"][0]["codeSize"] > 0 and ac["tasks"][0]["judged"], ac
+assert ac["totalScore"] == 100 and "score" in ac["tasks"][0] and ac["tasks"][0]["submitted"], ac
 for path in ["/contestants/ac", "/contestants/ac/source/0", "/export", "/statistics", "/state-summary",
-             "/files/download" + q(root="source", path="ac"), "/files/download" + q(root="contest", path=""),
-             "/files/download" + q(root="contest", path=CONTEST + ".cdf")]:
-    _, e = call("GET", c + path, token=key, expect=403)
-    assert e["contestRunning"], e
-call("POST", c + "/judge", {"mode": "state", "resultStates": [1]}, key, expect=403)
-call("POST", c + "/files/copy", {"root": "contest", "paths": ["source/ac"], "to": "data"}, key, expect=403)
-call("POST", c + "/files/compile", {"root": "source", "path": "ac/aplusb.cpp"}, key, expect=403)
-call("GET", c + "/files" + q(root="source", path="ac"), token=key, expect=200)
-call("GET", c + "/files/download" + q(root="data", path="aplusb/1.in"), token=key, expect=200)
-call("POST", c + "/judge", {"mode": "selected", "items": [{"contestant": "ac"}]}, key, expect=202)
-since = 0
-events = []
-while True:
-    _, st = call("GET", c + "/judge/status" + q(since=since), token=key, expect=200)
-    events += st["events"]
-    since = st["lastEventId"]
-    if not st["judging"]:
-        break
-    time.sleep(0.3)
-# only the start / end of the job: neither results nor which submissions are judged
-assert events and {e["type"] for e in events} <= {"start", "finished", "stopping", "skipped"}, events[:3]
+             "/files/download" + q(root="source", path="ac")]:
+    call("GET", c + path, token=key, expect=200)
 _, r = call("GET", "/api/contests", token=key, expect=200)
-assert next(x for x in r["contests"] if x["name"] == CONTEST)["running"]
-_, r = call("PUT", c, {"startTime": None, "endTime": None}, key, expect=200)
-assert not r["running"] and r["startTime"] is None
-assert next(x for x in r["contestants"] if x["name"] == "ac")["totalScore"] == 100
-call("GET", c + "/contestants/ac/source/0", token=key, expect=200)
-# the time of a contest that has ended can no longer be changed (re-sending the same values is fine)
-past = {"startTime": now - 7200000, "endTime": now - 3600000}
-call("PUT", c, past, key, expect=200)
-call("PUT", c, past, key, expect=200)
-call("PUT", c, {"startTime": now - 7200000, "endTime": now + 3600000}, key, expect=400)
-_, e = call("PUT", c, {"startTime": None, "endTime": None}, key, expect=400)
-assert "ended" in e["error"], e
-_, r = call("GET", c, token=key, expect=200)
-assert r["endTime"] == now - 3600000 and not r["running"], r
-print("contest time OK")
+assert "running" not in next(x for x in r["contests"] if x["name"] == CONTEST)
+print("no contest time OK")
 
 # down.zip (optional property of a contest)
 call("GET", c + "/down-zip", token=key, expect=404)
@@ -369,12 +334,12 @@ call("POST", c + "/judge/stop", token=key, expect=409)
 call("PUT", "/api/settings", {}, key, expect=200)
 print("judging queue OK")
 
-# clone a contest: tasks and data; submissions and results only when asked; never the contest time
+# clone a contest: tasks and data; submissions and results only when asked
 _, src = call("GET", c, token=key, expect=200)
 _, r = call("POST", c + "/clone", {"name": "克隆测试"}, key, expect=201)
 assert r["name"] == "克隆测试" and r["title"] == "克隆测试", r
 assert len(r["tasks"]) == len(src["tasks"]) and r["tasks"][0]["testCases"] == src["tasks"][0]["testCases"], r["tasks"]
-assert r["contestants"] == [] and r["startTime"] is None and src["startTime"] is not None, r
+assert r["contestants"] == [], r
 K1 = "/api/contests/" + urllib.parse.quote("克隆测试")
 call("GET", K1 + "/files/download" + q(root="data", path="aplusb/1.in"), token=key, expect=200)
 _, ls = call("GET", K1 + "/files" + q(root="contest", path=""), token=key, expect=200)
@@ -416,22 +381,15 @@ _, st = call("GET", "/api/judge/status", token=key, expect=200)
 assert st["progressMaximum"] == 4000 and st["progress"] == st["progressMaximum"], (st["progress"], st["progressMaximum"])
 assert sum(1 for e in st["events"] if e["type"] == "case") == 4, [e for e in st["events"] if e["type"] == "case"]
 
-# during the contest time, while the contest is being judged: only the overall progress
-now = int(time.time() * 1000)
-call("PUT", P, {"startTime": now - 60000, "endTime": now + 3600000}, key, expect=200)
+# while a contest is being judged its results and the judging details stay visible
 call("POST", P + "/judge", {"mode": "all"}, key, expect=202)
 _, r = call("GET", P, token=key, expect=200)
-assert r["judging"] and all("judged" not in t for x in r["contestants"] for t in x["tasks"]), r["contestants"][0]
-assert all("judgingTime" not in x and "submitted" in x["tasks"][0] for x in r["contestants"]), r["contestants"][0]
+assert all("judged" in t and "score" in t for x in r["contestants"] for t in x["tasks"]), r["contestants"][0]
 _, st = call("GET", "/api/judge/status", token=key, expect=200)
-assert st["contestRunning"] and "tasksDone" not in st and "progress" in st, st
-assert {e["type"] for e in st["events"]} <= {"start", "finished", "stopping", "skipped"}, st["events"]
-_, qu = call("GET", "/api/judge-queue", token=key, expect=200)
-assert qu["running"] is None or "tasksDone" not in qu["running"], qu
+assert "contestRunning" not in st and "tasksDone" in st and "progress" in st, st
 wait_idle()
-_, r = call("GET", P, token=key, expect=200)
-assert all("judged" in t for x in r["contestants"] for t in x["tasks"]), r["contestants"][0]  # not judging any more
-call("PUT", P, {"startTime": None, "endTime": None}, key, expect=200)
+_, st = call("GET", "/api/judge/status", token=key, expect=200)
+assert any(e["type"] == "case" for e in st["events"]), st["events"][-3:]
 call("DELETE", P, token=key, expect=200)
-print("progress / contest-time judging OK")
+print("progress OK")
 print("ALL OK")

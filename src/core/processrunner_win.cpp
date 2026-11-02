@@ -30,10 +30,24 @@
 
 using namespace Lemon::Windows;
 
+namespace {
+	auto milliseconds(const FILETIME &time) -> int {
+		return int(((quint64(time.dwHighDateTime) << 32) | time.dwLowDateTime) / 10000);
+	}
+
+	auto userTimeOf(HANDLE process) -> int {
+		FILETIME creationTime, exitTime, kernelTime, userTime;
+		if (! GetProcessTimes(process, &creationTime, &exitTime, &kernelTime, &userTime))
+			return -1;
+		return milliseconds(userTime);
+	}
+} // namespace
+
 ProcessRunnerResult WinProcessRunner::run() {
 	ProcessRunnerResult res;
 	res.result = CorrectAnswer;
-	int extraTime = qCeil(qMax(2000, config.timeLimit * 2) * config.extraTimeRatio);
+	const int cpuTimeLimit = rejudgeTimeLimit(config.timeLimit, config.extraTimeRatio);
+	const int wallTimeLimit = ProcessRunner::wallTimeLimit(config);
 
 	std::unique_ptr<WindowsSandbox> sandbox;
 	if (config.sandboxSettings.enabled) {
@@ -146,12 +160,18 @@ ProcessRunnerResult WinProcessRunner::run() {
 	}
 
 	bool isProgramFinishedInExtraTimeLimit = false;
+	int overTime = -1;
 	QElapsedTimer timer;
 	timer.start();
 
-	while (timer.elapsed() <= config.timeLimit + extraTime) {
+	while (timer.elapsed() <= wallTimeLimit) {
 		if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) {
 			isProgramFinishedInExtraTimeLimit = true;
+			break;
+		}
+
+		if (const int used = userTimeOf(pi.hProcess); used > cpuTimeLimit) {
+			overTime = used;
 			break;
 		}
 
@@ -181,7 +201,8 @@ ProcessRunnerResult WinProcessRunner::run() {
 
 		res.score = 0;
 		res.result = TimeLimitExceeded;
-		res.timeUsed = -1;
+		// over the CPU time limit: show by how much; stopped after waiting: no meaningful time
+		res.timeUsed = overTime;
 		return res;
 	}
 
@@ -208,13 +229,8 @@ ProcessRunnerResult WinProcessRunner::run() {
 
 	FILETIME creationTime, exitTime, kernelTime, userTime;
 	GetProcessTimes(pi.hProcess, &creationTime, &exitTime, &kernelTime, &userTime);
-	SYSTEMTIME realUserTime, realKernelTime;
-	FileTimeToSystemTime(&userTime, &realUserTime);
-	FileTimeToSystemTime(&kernelTime, &realKernelTime);
-	res.timeUsed = realUserTime.wMilliseconds + realUserTime.wSecond * 1000 +
-	               realUserTime.wMinute * 60 * 1000 + realUserTime.wHour * 60 * 60 * 1000;
-	int kernelTimeUsed = realKernelTime.wMilliseconds + realKernelTime.wSecond * 1000 +
-	                     realKernelTime.wMinute * 60 * 1000 + realKernelTime.wHour * 60 * 60 * 1000;
+	res.timeUsed = milliseconds(userTime);
+	int kernelTimeUsed = milliseconds(kernelTime);
 	GetProcessMemoryInfo(pi.hProcess, (PROCESS_MEMORY_COUNTERS *)&memoryInfo, sizeof(memoryInfo));
 	res.memoryUsed = memoryInfo.PeakWorkingSetSize;
 	if (sandbox) {

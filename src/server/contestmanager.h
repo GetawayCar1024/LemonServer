@@ -77,12 +77,6 @@ class ContestManager : public QObject {
 	// (the .cdf format stays LemonLime's). The functions without a name are about the current contest.
 	static constexpr const char *kPropertiesFile = "lemonserver.json";
 	QString currentPropertiesPath() const;
-	// Contest time (both invalid = not set). During it results and source code are hidden.
-	QDateTime startTime() const;
-	QDateTime endTime() const;
-	bool isContestRunning() const;
-	bool isContestRunning(const QString &name) const;
-	bool setContestTime(const QDateTime &start, const QDateTime &end, QString *error);
 	// down.zip of the contest, relative to the contest folder (empty = not set).
 	QString downZip() const;
 	bool setDownZip(const QString &relativePath, QString *error);

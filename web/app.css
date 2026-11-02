@@ -87,6 +87,7 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; margin-right
 .topbar .spacer { flex: 1; }
 .topbar button { background: transparent; color: var(--blue); }
 .topbar button:hover:not(:disabled) { background: var(--sel); }
+.topbar button.active { background: var(--sel); font-weight: 600; }
 .judging-badge { background: var(--accent); color: #fff; padding: 3px 11px; border-radius: 12px; cursor: pointer; font-size: 12.5px; font-weight: 600; }
 
 .main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -141,7 +142,8 @@ table.boxed td:last-child, table.boxed th:last-child { border-right: none; }
 .tree-item .twisty { width: 14px; text-align: center; color: var(--muted); font-size: 11px; flex: none; }
 .tree-item .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-item .score { margin-left: auto; color: var(--muted); font-size: 12px; flex: none; }
-.tree-actions { padding: 10px; border-top: 1px solid var(--sep); display: flex; flex-wrap: wrap; gap: 5px; }
+.tree-actions { padding: 10px; border-top: 1px solid var(--sep); display: flex; flex-direction: column; gap: 6px; }
+.tree-actions .row { gap: 5px; flex-wrap: nowrap; }
 .editor { flex: 1; overflow: auto; padding: 20px 26px; }
 .editor-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .editor-head h2 { margin: 0; }
@@ -215,7 +217,8 @@ table.files tr.file-row:hover .actions { visibility: visible; }
 .toast.error { background: rgba(215, 40, 30, .92); }
 
 /* ---------- misc ---------- */
-.list-item { display: flex; align-items: center; gap: 12px; padding: 12px 4px; border-bottom: 1px solid var(--sep); }
+.list-item { display: flex; align-items: center; gap: 12px; padding: 12px 10px; margin: 0 -10px; border-bottom: 1px solid var(--sep); border-radius: 8px; transition: background .15s; }
+.list-item:hover { background: var(--fill-faint); }
 .list-item:last-child { border-bottom: none; }
 .list-item .title { font-weight: 600; font-size: 15px; }
 .keybox { background: var(--panel-2); border: 1px solid var(--sep); padding: 10px 12px; border-radius: var(--radius); font-size: 14px; word-break: break-all; }
@@ -323,14 +326,10 @@ table.tcm-table input.missing { border-color: var(--danger); color: var(--danger
 table.tcm-table td.sub, table.tcm-table tr.case td.c { user-select: none; -webkit-user-select: none; }
 table.tcm-table input { user-select: text; -webkit-user-select: text; }
 
-/* contest time */
-.pill.contest-phase.before { background: rgba(0, 122, 255, .12); color: var(--blue); }
-.pill.contest-phase.running { background: rgba(255, 149, 0, .16); color: #c26a00; }
-:root[data-theme=dark] .pill.contest-phase.running { color: #ffb340; }
-.pill.contest-phase.ended { background: var(--fill); color: var(--muted); }
-table.results.running td.cell { font-variant-numeric: tabular-nums; }
-.judge-mark { display: block; font-size: 11px; color: var(--muted); }
-.judge-mark.done { color: var(--accent-strong); }
+/* results: cells not judged yet */
+table.results .unjudged { color: var(--muted); font-size: 12px; }
+table.results .unjudged.submitted { color: #c26a00; }
+:root[data-theme=dark] table.results .unjudged.submitted { color: #ffb340; }
 
 /* judging queue */
 .busy-bar { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: #c26a00; background: rgba(255, 149, 0, .14); padding: 3px 4px 3px 10px; border-radius: 999px; }
