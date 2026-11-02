@@ -9,13 +9,16 @@ g++ -O2 -std=c++17 -o "$work/watcher" unix/watcher_unix.cpp unix/watcher_linux.c
 
 cat >"$work/common.h" <<'EOF'
 #include <cstdio>
+#include <fcntl.h>
 #include <sys/resource.h>
 #include <unistd.h>
 static long long ms(const timeval &t) { return t.tv_sec * 1000LL + t.tv_usec / 1000; }
 static void times(long long &user, long long &sys) { rusage u{}; getrusage(RUSAGE_SELF, &u); user = ms(u.ru_utime); sys = ms(u.ru_stime); }
 static volatile unsigned long long sink;
 static void spinUntil(long long target) { long long user = 0, sys = 0; for (;;) { for (int i = 0; i < 1000000; i++) sink += i; times(user, sys); if (user >= target) return; } }
-static void kernelUntil(long long target) { long long user = 0, sys = 0; for (;;) { for (int i = 0; i < 2000; i++) sink += getppid(); times(user, sys); if (sys >= target) return; } }
+// reading /dev/zero into a large buffer is spent almost entirely in the kernel
+static char buffer[1 << 20];
+static void kernelUntil(long long target) { int fd = open("/dev/zero", O_RDONLY); long long user = 0, sys = 0; for (;;) { for (int i = 0; i < 16; i++) sink += read(fd, buffer, sizeof buffer); times(user, sys); if (sys >= target) break; } close(fd); }
 EOF
 declare -A src=(
 	[ok]='int main() { puts("3"); }'

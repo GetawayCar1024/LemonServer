@@ -112,7 +112,7 @@ long long getUserTimeMs(pid_t pid) {
 	const char *rest = strrchr(buffer, ')');
 	unsigned long long ticks = 0;
 	if (rest == NULL ||
-	    sscanf(rest + 1, " %*c %*d %*d %*d %*d %*d %*u %*lu %*lu %*lu %*lu %llu", &ticks) != 1) {
+	    sscanf(rest + 1, " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu", &ticks) != 1) {
 		return -1;
 	}
 	static const long ticksPerSecond = sysconf(_SC_CLK_TCK);
