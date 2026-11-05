@@ -38,3 +38,5 @@ python tests/judging-compat/compare.py build/tests/judging-compat/judge-compat-c
 ```
 
 Windows 使用相应 Qt/MSVC 或 MinGW 环境，最后两个路径加 `.exe`，并保证 Qt DLL 和 g++ 在搜索路径中。测试只使用自行创建的临时目录。
+
+Linux 对照测试默认使用 `/usr/bin/python3`，而不是 CI 工具放在 `/opt` 下的 Python；后者不在原版 runner 的沙箱挂载范围内。可用 `LEMON_COMPAT_PYTHON` 显式指定两个对照引擎共用的解释器，不会为测试关闭沙箱或扩大挂载范围。

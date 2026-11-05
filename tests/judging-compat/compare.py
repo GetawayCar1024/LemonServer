@@ -14,6 +14,13 @@ CURRENT, REFERENCE = (str(Path(value).resolve()) for value in sys.argv[1:3])
 ENV = dict(os.environ)
 if os.name == "nt" and Path("E:/MinGW64/bin/g++.exe").exists():
     ENV["PATH"] = "E:/MinGW64/bin;" + ENV.get("PATH", "")
+# The Linux runner deliberately mounts /usr, not GitHub's /opt tool cache.
+# Qt's setup action prepends its own Python to PATH; use the system interpreter for both engines.
+if "LEMON_COMPAT_PYTHON" not in ENV:
+    if sys.platform.startswith("linux") and Path("/usr/bin/python3").exists():
+        ENV["LEMON_COMPAT_PYTHON"] = "/usr/bin/python3"
+    else:
+        ENV["LEMON_COMPAT_PYTHON"] = shutil.which("python", path=ENV["PATH"]) or ""
 
 CHECKER = r'''#include <cstdio>
 #include <fstream>
@@ -87,7 +94,8 @@ def run():
             ("compiled-RE", 0, [case()], ["5\n"], [], None, 'int main(){return 7;}'),
             ("compiled-TLE", 0, [{**case(), "timeLimit": 200}], ["5\n"], [], None, 'int main(){volatile unsigned long long x=0;for(;;)++x;}'),
         ])
-        if shutil.which("python", path=ENV["PATH"]):
+        if ENV["LEMON_COMPAT_PYTHON"]:
+            print("Python interpreter:", ENV["LEMON_COMPAT_PYTHON"])
             scenarios.extend([
                 ("python-AC", 0, [{**case(), "timeLimit": 1000}], ["5\n"], [], None, {"python": "print(sum(map(int,input().split())))\n"}),
                 ("python-WA", 0, [{**case(), "timeLimit": 1000}], ["5\n"], [], None, {"python": "print(0)\n"}),

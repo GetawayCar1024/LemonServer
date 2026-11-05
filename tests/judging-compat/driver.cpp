@@ -55,7 +55,9 @@ int main(int argc, char **argv) {
 	settings.addCompiler(&cpp);
 	Compiler python;
 	python.setCompilerName("python"); python.setCompilerType(Compiler::InterpretiveWithoutByteCode);
-	python.setSourceExtensions("py"); python.setInterpreterLocation(QStandardPaths::findExecutable("python"));
+	python.setSourceExtensions("py");
+	const QString testPython = qEnvironmentVariable("LEMON_COMPAT_PYTHON");
+	python.setInterpreterLocation(testPython.isEmpty() ? QStandardPaths::findExecutable("python") : testPython);
 	python.addConfiguration("default", "", "%s.py"); settings.addCompiler(&python);
 	Task task;
 	QJsonObject value; task.writeToJson(value);
