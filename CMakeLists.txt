@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20.0)
 project(LemonServer LANGUAGES CXX)
 
 # Version of the LemonServer fork; LEMON_VERSION_STRING (makespec/VERSION) stays the upstream LemonLime version.
-set(LEMONSERVER_VERSION "0.1.7")
+set(LEMONSERVER_VERSION "0.1.8")
 
 ## Add paths to check for cmake modules:
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -228,6 +228,9 @@ endif()
 include(cmake/lemon-base.cmake)
 include(cmake/lemon-core.cmake)
 
+# Optional differential test drivers; sources are extracted from the pinned upstream commit.
+set(LEMON_COMPAT_REFERENCE_DIR "" CACHE PATH "Unmodified LemonLime judging source directory")
+
 # ==================================================================================
 # Lemon Documents
 # ==================================================================================
@@ -278,6 +281,10 @@ if(NOT WIN32)
     endif()
     configure_file(unix/watcher.qrc ${CMAKE_BINARY_DIR} COPYONLY)
     set(LEMON_WATCHER_QRC ${CMAKE_BINARY_DIR}/watcher.qrc)
+endif()
+
+if(LEMON_COMPAT_REFERENCE_DIR)
+    add_subdirectory(tests/judging-compat)
 endif()
 
 if(WIN32 AND ENABLE_XLS_EXPORT)

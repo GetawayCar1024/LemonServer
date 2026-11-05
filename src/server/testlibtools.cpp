@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QSaveFile>
 #include <QStringDecoder>
 #include <QTemporaryDir>
 
@@ -22,7 +23,10 @@ namespace TestlibTools {
 
 	QByteArray testlibHeader() {
 		QFile f(":/testlib/testlib.h");
-		return f.open(QFile::ReadOnly) ? f.readAll() : QByteArray();
+		if (! f.open(QFile::ReadOnly))
+			return {};
+		// The bundled revision uses fixed-width integer types without including their header.
+		return QByteArray("#include <cstdint>\n") + f.readAll();
 	}
 
 	QStringList templateNames() {
@@ -138,9 +142,15 @@ namespace TestlibTools {
 			return result;
 		}
 		QDir().mkpath(QFileInfo(request.output).absolutePath());
-		QFile::remove(request.output);
-		if (! QFile::copy(tempOutput, request.output)) {
+		QFile built(tempOutput);
+		QSaveFile destination(request.output);
+		if (! built.open(QFile::ReadOnly) || ! destination.open(QFile::WriteOnly)) {
 			result.output += "\nCannot write " + request.output;
+			return result;
+		}
+		const auto bytes = built.readAll();
+		if (destination.write(bytes) != bytes.size() || ! destination.commit()) {
+			result.output += "\nCannot replace " + request.output;
 			return result;
 		}
 		QFile(request.output).setPermissions(QFile(request.output).permissions() | QFileDevice::ExeOwner |

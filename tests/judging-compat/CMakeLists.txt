@@ -1,0 +1,20 @@
+foreach(engine IN ITEMS current reference)
+    add_executable(judge-compat-${engine} driver.cpp)
+    target_link_libraries(judge-compat-${engine} PRIVATE lemon-core lemon-base spdlog::spdlog)
+    if(engine STREQUAL "reference")
+        target_compile_definitions(judge-compat-${engine} PRIVATE LEMON_REFERENCE_ENGINE)
+        target_sources(judge-compat-${engine} PRIVATE
+            ${LEMON_COMPAT_REFERENCE_DIR}/casejudger.cpp
+            ${LEMON_COMPAT_REFERENCE_DIR}/taskjudger.cpp
+            ${LEMON_COMPAT_REFERENCE_DIR}/processrunner.cpp)
+        if(WIN32)
+            target_sources(judge-compat-${engine} PRIVATE ${LEMON_COMPAT_REFERENCE_DIR}/processrunner_win.cpp)
+        else()
+            target_sources(judge-compat-${engine} PRIVATE ${LEMON_COMPAT_REFERENCE_DIR}/processrunner_unix.cpp)
+        endif()
+    endif()
+    if(NOT WIN32)
+        target_sources(judge-compat-${engine} PRIVATE ${LEMON_WATCHER_QRC})
+        add_dependencies(judge-compat-${engine} watcher_unix)
+    endif()
+endforeach()

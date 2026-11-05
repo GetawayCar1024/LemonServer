@@ -16,3 +16,5 @@ packaging/ubuntu/postinst text eol=lf
 packaging/ubuntu/postrm text eol=lf
 *.rules text eol=lf
 *.pkla text eol=lf
+web/vendor/js-yaml-4.1.1.min.js -text
+web/vendor/js-yaml-LICENSE -text

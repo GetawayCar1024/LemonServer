@@ -3,6 +3,10 @@
         <file>index.html</file>
         <file>app.js</file>
         <file>autosave.js</file>
+        <file>hydro-import.js</file>
+        <file>vendor/js-yaml-4.1.1.min.js</file>
+        <file>vendor/js-yaml-LICENSE</file>
+        <file>vendor/README.md</file>
         <file>app.css</file>
         <file>favicon.png</file>
         <file>logo.png</file>

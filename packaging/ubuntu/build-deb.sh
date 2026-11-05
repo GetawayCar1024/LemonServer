@@ -54,6 +54,8 @@ install -Dm644 "$HERE/lemonserver.rules" "$ROOT/usr/share/polkit-1/rules.d/50-le
 install -Dm644 "$HERE/lemonserver.pkla" "$ROOT/var/lib/polkit-1/localauthority/10-vendor.d/50-lemonserver.pkla"
 install -m644 "$SRC/LICENSE" "$ROOT/usr/share/doc/lemonserver/copyright"
 install -m644 "$SRC/README.md" "$ROOT/usr/share/doc/lemonserver/README.md"
+install -m644 "$SRC/docs/"*.md "$ROOT/usr/share/doc/lemonserver/"
+install -m644 "$SRC/web/vendor/js-yaml-LICENSE" "$ROOT/usr/share/doc/lemonserver/js-yaml-copyright"
 install -m755 "$HERE/postinst" "$HERE/postrm" "$ROOT/DEBIAN/"
 
 cat > "$ROOT/DEBIAN/control" <<EOF

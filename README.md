@@ -14,13 +14,13 @@ LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project
 | 网页中 | 对应 LemonLime 桌面版 |
 | --- | --- |
 | 比赛列表：新建（只需输入比赛名，自动存放在默认比赛位置）、打开、删除、改名、克隆（可选是否复制选手程序和成绩）；导入已配置好的比赛（含 .cdf 的文件夹或 zip，可拖拽） | 新建比赛 / 打开比赛 / 修改比赛名 |
-| 试题页：比赛概况树（试题 → 测试点，右键菜单与 Ctrl+Insert / Insert / Delete 快捷键同 LemonLime）、试题设置、测试点设置、自动添加试题、批量添加测试点（模式 + 参数）、上移/下移 | SummaryTree、TaskEditWidget、TestCaseEditWidget、AddTestCasesWizard |
-| 测试点管理器：表格内直接编辑分值/时限/内存/依赖/数据路径，多选（Ctrl/Shift），上移下移、拖动排序、合并、拆分、把数据移到其他测试点、批量修改、标出不存在的数据文件、撤销/重做，依赖关系自动跟随调整 | ExtTestCaseModifier |
+| 试题页：试题／测试点设置、右键操作、自动／批量添加，按钮或拖动重排题目；支持粘贴或选择本地 Hydro 配置导入 | SummaryTree、TaskEditWidget、TestCaseEditWidget、AddTestCasesWizard |
+| 测试点管理器：拖动连续选择、Ctrl/Shift 多选、双击编辑、右键修改／批量修改／绑定／合并／拆分／移动／删除、撤销重做；子任务浅深交替，依赖随调整保留 | ExtTestCaseModifier |
 | 结果页：成绩表（同样的配色；单击 / Ctrl / Shift / 拖动选择；右键菜单“详情 / 评测 / 删除选手”同 LemonLime，另有“源程序”；Delete 删除选手）、评测选中 / 全部 / 未评测 / 按状态重测（NS、CE、TLE、WA…，显示每种状态的数量）、停止评测、侧边栏中的实时评测日志与进度、全局评测队列（所有比赛依次评测，评测期间可编辑其他比赛，正在评测或排队的比赛不能修改，可“全部出队”）、选手详细结果、查看源程序、删除选手、整理选手文件 | ResultViewer、JudgingDialog、DetailDialog、清理文件 |
 | 导出 result.html / result.htm / CSV（下载，或保存到比赛文件夹） | 导出结果 |
 | 统计页，可导出 statistics.html | StatisticsBrowser |
 | 文件：当前比赛文件夹的文件系统（左侧目录树），上传文件 / 文件夹 / zip 到任意文件夹（可直接拖到目录树中的文件夹上）；单击/Ctrl/Shift 多选、拖动移动（Ctrl 复制）、复制剪切粘贴、移动到…、右键菜单、筛选、排序，以及常用快捷键（按 ? 查看）；在线编辑 100 KiB 以下的文本文件（保留原编码和换行符，显示最后修改时间，被他人修改过时提示冲突）；新建、重命名、删除、下载（文件夹打包 zip） | 打开比赛文件夹 |
-| Testlib for Lemons：在文件系统中右键或 Ctrl+B 在服务器上编译 C/C++ 源文件（内置 testlib.h，Windows 下静态链接），查看编译输出，一键设为某题的校验器；从内置模板（checkers / interactors / validators / generators）新建文件 | 手动编译校验器 |
+| 校验器：选择已有程序，或勾选“从源文件编译”，选择服务器文件／本地上传后编译使用；文件系统中仍可右键或 Ctrl+B 编译，提供 Testlib 模板 | 手动编译校验器 |
 | 比赛设置：down.zip（可不设置，供 CodeHub 导入）：上传或指定比赛文件夹中的文件。LemonServer 没有比赛时间，成绩与评测详情任何时候都可查看 | —（LemonServer 专有） |
 | 浅色 / 深色 / 跟随系统 | 深色模式 |
 | 设置：常规设置、编译器（含自动检测）、评测语言与配色 | 选项对话框、添加编译器向导 |
@@ -84,6 +84,8 @@ LemonServer [--host 0.0.0.0] [--port 8080] [--config <server.json>] [--web-root 
 
 题目显示名可以用中文。源程序名（不含扩展名）和启用的文件输入输出名使用英文字母、数字、点、下划线或连字符，不可使用路径或系统保留名；改显示名不会重命名程序或数据。中文数据文件夹自动添加为题目时，会单独提供英文源程序名。配置自动保存，开始评测前会等待保存完成；保存失败时请根据提示修正或点击状态重试。
 
+测试点管理器左侧为子任务，右侧为测试点。选中右侧会关联其子任务；“合并子任务”合并完整子任务，“绑定到…”移动所选测试点。普通拖动用于选择，拖动把手用于排序，双击或 F2 编辑单元格。Hydro 转换范围及跳过规则见 [导入说明](docs/hydro-import.md)。
+
 - `--config`：服务器配置文件（令牌哈希、API Key、默认比赛位置），默认在 `%LOCALAPPDATA%\LemonServer\server.json`（Linux：`~/.config/LemonServer/server.json`）。
 - 评测设置与编译器默认保存在配置文件旁的 `settings.ini` 中，首次启动会自动检测 PATH 中的 gcc / g++ / fpc / jdk / python。加 `--use-desktop-settings` 则与本机的 LemonLime 桌面版共用设置。
 - `--reset-token`：忘记令牌时把它重置为 `123456`。
@@ -129,6 +131,8 @@ python tests/server/smoke_test.py http://127.0.0.1:8080 /path/to/empty/contest-r
 ```
 
 路径回归自行启动隔离的临时服务器：`python tests/server/task_paths_test.py /path/to/LemonServer`。前端保存队列使用 `node --test tests/server/autosave_test.mjs`；题目折叠及立即评测的浏览器回归为 `node tests/server/ui_test.mjs /path/to/LemonServer --embedded`（需要 Node.js 24 和 Chromium，可用 `CHROME_BIN` 指定浏览器）。
+
+Hydro 转换回归：`node --test tests/server/hydro_import_test.mjs`。管理器、拖排、校验器和导入的浏览器回归：`node tests/server/editor_ui_test.mjs /path/to/LemonServer --embedded`。与原版评测器的对比方法和保留差异见 [评测一致性](docs/judging-compatibility.md)。
 
 ## 代码结构与对上游的改动
 

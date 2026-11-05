@@ -943,6 +943,8 @@ void LemonServer::setupTestlibRoutes() {
 		    Contest *c = nullptr;
 		    if (auto r = withContest(name, &c))
 			    return ready(std::move(*r));
+		    if (auto r = notWhileBusy())
+			    return ready(std::move(*r));
 		    bool ok = false;
 		    const auto body = parseBody(req, &ok);
 		    if (! ok)
@@ -1281,11 +1283,30 @@ void LemonServer::setupContestRoutes() {
 			             return std::move(*r);
 		             bool ok = false;
 		             const auto body = parseBody(req, &ok);
-		             const int to = body["direction"].toString() == "up" ? index - 1 : index + 1;
+		             if (! ok)
+			             return errorResponse(Status::BadRequest, "invalid JSON");
+		             int to;
+		             if (body.contains("to")) {
+			             if (! body["to"].isDouble() || body["to"].toDouble() != body["to"].toInt(-1))
+				             return errorResponse(Status::BadRequest, "invalid target index");
+			             to = body["to"].toInt(-1);
+		             } else {
+			             const auto direction = body["direction"].toString();
+			             if (direction != "up" && direction != "down")
+				             return errorResponse(Status::BadRequest, "invalid direction");
+			             to = direction == "up" ? index - 1 : index + 1;
+		             }
 		             if (! c->getTask(index) || ! c->getTask(to))
 			             return errorResponse(Status::BadRequest, "cannot move task");
-		             c->swapTask(index, to);
-		             manager->save();
+		             const int step = to > index ? 1 : -1;
+		             for (int i = index; i != to; i += step)
+			             c->swapTask(i, i + step);
+		             QString error;
+		             if (! manager->save(&error)) {
+			             for (int i = to; i != index; i -= step)
+				             c->swapTask(i, i - step);
+			             return errorResponse(Status::InternalServerError, error);
+		             }
 		             return okResponse({{"index", to}});
 	             });
 

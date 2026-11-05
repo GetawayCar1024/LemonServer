@@ -778,7 +778,8 @@ function renderTasksTab(page) {
         { label: '新建测试点', kbd: 'Insert', disabled: judging, onClick: () => addTestCase() },
         { label: '批量添加测试点…', disabled: judging, onClick: () => addTestCasesWizard() });
       if (S.sel.testCase >= 0) items.push({ label: '删除测试点', kbd: 'Delete', danger: true, disabled: judging, onClick: () => deleteTestCase(S.sel.task, S.sel.testCase) });
-      else items.push('sep', { label: '测试点管理器', disabled: judging, onClick: () => openTestCaseManager(S.sel.task) });
+      else items.push('sep', { label: '测试点管理器', disabled: judging, onClick: () => openTestCaseManager(S.sel.task) },
+        { label: '导入 Hydro 配置…', disabled: judging, onClick: () => importHydroConfig(S.sel.task) });
     }
     showMenu(e.clientX, e.clientY, items);
   };
@@ -807,16 +808,38 @@ function renderTasksTab(page) {
   };
 
   const tasks = S.contest.tasks;
+  let draggedTask = null;
+  const clearDrop = () => treeList.querySelectorAll('.task-drop-before,.task-drop-after').forEach(row => row.classList.remove('task-drop-before', 'task-drop-after'));
   if (!tasks.length) treeList.appendChild(h('div', { class: 'empty' }, '暂无试题'));
   tasks.forEach((t, i) => {
     const open = S.sel.expanded.has(i);
-    treeList.appendChild(h('div', {
+    const taskRow = h('div', {
       class: 'tree-item' + (S.sel.task === i && S.sel.testCase < 0 ? ' selected' : ''),
+      'data-task': i, draggable: !judging,
       onclick: () => { S.sel.task = i; S.sel.testCase = -1; rerenderTasks(); },
       oncontextmenu: pick(i, -1),
     }, h('span', {
       class: 'twisty', onclick: (e) => { e.stopPropagation(); if (S.sel.expanded.has(i)) S.sel.expanded.delete(i); else S.sel.expanded.add(i); rerenderTasks(); },
-    }, open ? '▼' : '▶'), h('span', { class: 'label' }, t.problemTitle || '(未命名)'), h('span', { class: 'score' }, t.totalScore)));
+    }, open ? '▼' : '▶'), h('span', { class: 'label' }, t.problemTitle || '(未命名)'), h('span', { class: 'score' }, t.totalScore));
+    taskRow.addEventListener('dragstart', e => {
+      if (judging) { e.preventDefault(); return; }
+      draggedTask = i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('application/x-lemon-task', String(i));
+    });
+    taskRow.addEventListener('dragover', e => {
+      if (draggedTask === null || judging) return;
+      e.preventDefault(); clearDrop();
+      taskRow.classList.add(e.clientY < taskRow.getBoundingClientRect().top + taskRow.offsetHeight / 2 ? 'task-drop-before' : 'task-drop-after');
+    });
+    taskRow.addEventListener('drop', e => {
+      if (draggedTask === null || judging) return;
+      e.preventDefault(); e.stopPropagation();
+      const from = draggedTask;
+      const insertion = i + (e.clientY >= taskRow.getBoundingClientRect().top + taskRow.offsetHeight / 2 ? 1 : 0);
+      draggedTask = null; clearDrop();
+      moveTaskTo(from, insertion > from ? insertion - 1 : insertion);
+    });
+    taskRow.addEventListener('dragend', () => { draggedTask = null; clearDrop(); });
+    treeList.appendChild(taskRow);
     if (open) {
       t.testCases.forEach((tc, j) => {
         treeList.appendChild(h('div', {
@@ -826,6 +849,11 @@ function renderTasksTab(page) {
         }, h('span', { class: 'label' }, '#' + (j + 1)), h('span', { class: 'score' }, tc.fullScore + (tc.inputFiles.length > 1 ? ` · ${tc.inputFiles.length} 组` : ''))));
       });
     }
+  });
+  treeList.addEventListener('dragover', e => { if (draggedTask !== null && e.target === treeList) e.preventDefault(); });
+  treeList.addEventListener('drop', e => {
+    if (draggedTask === null || e.target !== treeList || judging) return;
+    e.preventDefault(); const from = draggedTask; draggedTask = null; clearDrop(); moveTaskTo(from, tasks.length - 1);
   });
 
   if (S.sel.task >= 0 && tasks[S.sel.task]) {
@@ -878,11 +906,18 @@ async function addTestCase() {
 }
 
 async function moveTask(d) {
+  return moveTaskTo(S.sel.task, S.sel.task + (d < 0 ? -1 : 1));
+}
+
+async function moveTaskTo(from, to) {
+  if (S.contest.busy || from === to || from < 0 || to < 0 || to >= S.contest.tasks.length) return;
   try {
     await LemonAutosave.flushAll();
-    const r = await api('POST', cpath() + '/tasks/' + S.sel.task + '/move', { direction: d < 0 ? 'up' : 'down' });
+    const remap = index => index === from ? to : from < to && index > from && index <= to ? index - 1 : from > to && index >= to && index < from ? index + 1 : index;
+    const selected = remap(S.sel.task), expanded = new Set([...S.sel.expanded].map(remap));
+    await api('POST', cpath() + '/tasks/' + from + '/move', { to });
     await reloadContest();
-    S.sel.task = r.index;
+    S.sel.task = selected; S.sel.expanded = expanded;
     rerenderTasks();
   } catch (e) { fail(e); }
 }
@@ -970,6 +1005,44 @@ function renderTaskEditor(editor, i) {
   const num = (k, attrs = {}) => h('input', { type: 'number', value: t[k], disabled, oninput: (e) => set(k, +e.target.value), ...attrs });
   const check = (k, label) => h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: t[k], disabled, onchange: (e) => set(k, e.target.checked) }), label);
   const dataPath = (k) => text(k, { list: 'datafiles', placeholder: 'data 中的路径' });
+  const checkerControl = () => {
+    const source = h('input', { type: 'checkbox', disabled, 'aria-label': '从源文件编译' });
+    const path = h('input', { type: 'text', value: t.specialJudge || '', list: 'datafiles', disabled, class: 'mono', 'aria-label': '校验器文件', style: { maxWidth: 'none', flex: '1 1 240px' }, oninput: () => { if (!source.checked) set('specialJudge', path.value); } });
+    const build = h('button', { class: 'small primary hidden', disabled, onclick: async () => {
+      if (!path.value) return toast('请选择源文件', 'error');
+      try {
+        await save.flush();
+        compileDialog('data/' + path.value, async executable => {
+          await saveTask(i, { specialJudge: executable.replace(/^data\//, '') });
+          rerenderEditor();
+        }, { assign: false, closeOnSuccess: true });
+      } catch (error) { fail(error); }
+    } }, '编译并使用');
+    source.addEventListener('change', () => { build.classList.toggle('hidden', !source.checked); path.value = source.checked ? '' : t.specialJudge || ''; });
+    const fromServer = async () => {
+      const value = await pickDataFile(source.checked ? '选择校验器源文件' : '选择校验器', source.checked ? /\.(?:cpp|cc|cxx|c)$/i : null);
+      if (!value) return;
+      path.value = value; if (!source.checked) set('specialJudge', value);
+    };
+    const fromLocal = () => {
+      const file = h('input', { type: 'file', accept: source.checked ? '.cpp,.cc,.cxx,.c' : null });
+      file.onchange = async () => {
+        const chosen = file.files[0]; if (!chosen) return;
+        const target = 'checkers/' + chosen.name;
+        if (S.dataFiles.includes(target) && !await confirmDlg(`替换 ${chosen.name}？`, '替换')) return;
+        try {
+          await api('PUT', cpath() + '/files/upload' + qs({ root: 'data', path: target }), undefined, { raw: chosen });
+          if (!S.dataFiles.includes(target)) S.dataFiles.push(target);
+          path.value = target; if (!source.checked) set('specialJudge', target);
+        } catch (error) { fail(error); }
+      };
+      file.click();
+    };
+    return h('div', null, h('div', { class: 'row' }, path,
+      h('button', { class: 'small', disabled, onclick: fromServer }, '选择文件'),
+      h('button', { class: 'small', disabled, onclick: fromLocal }, '本地上传')),
+      h('div', { class: 'row', style: { marginTop: '6px' } }, h('label', { class: 'inline' }, source, '从源文件编译'), build));
+  };
 
   const typeSeg = h('div', { class: 'segmented' }, TASK_TYPES.map((label, v) => h('div', {
     class: t.taskType === v ? 'active' : '', onclick: () => { if (!disabled && t.taskType !== v) saveNow({ taskType: v }); },
@@ -984,9 +1057,9 @@ function renderTaskEditor(editor, i) {
   });
 
   const grid = h('div', { class: 'form-grid' },
-    field('名称', titleInput, '仅作显示，可使用中文；改名不会重命名程序或数据'),
+    field('名称', titleInput),
     field('类型', typeSeg),
-    isProgram && !isComm ? field('源程序名', text('sourceFileName', { id: 'f-src', placeholder: '英文文件名，不含扩展名', maxlength: 64 }), '使用英文字母、数字、点、下划线或连字符') : null,
+    isProgram && !isComm ? field('源程序名', text('sourceFileName', { id: 'f-src', placeholder: '英文文件名，不含扩展名', maxlength: 64 })) : null,
     isProgram ? field('', check('subFolderCheck', '源程序在选手的同名子文件夹中')) : null,
     isProgram ? field('输入文件', h('div', { class: 'row' }, h('div', { style: { flex: '0 1 260px' } }, text('inputFileName')), check('standardInputCheck', '标准输入'))) : null,
     isProgram ? field('输出文件', h('div', { class: 'row' }, h('div', { style: { flex: '0 1 260px' } }, text('outputFileName')), check('standardOutputCheck', '标准输出'))) : null,
@@ -994,7 +1067,7 @@ function renderTaskEditor(editor, i) {
     field('比较方式', cmpSelect),
     t.comparisonMode === 2 ? field('diff 参数', text('diffArguments')) : null,
     t.comparisonMode === 3 ? field('精度（位）', num('realPrecision', { min: 0, max: 18 })) : null,
-    t.comparisonMode >= 4 ? field('校验器', dataPath('specialJudge')) : null,
+    t.comparisonMode >= 4 ? field('校验器', checkerControl()) : null,
     t.taskType === 2 ? field('交互库', dataPath('interactor')) : null,
     t.taskType === 2 ? field('交互库文件名', text('interactorName')) : null,
     t.taskType === 2 ? field('Grader', dataPath('grader')) : null,
@@ -1018,6 +1091,7 @@ function renderTaskEditor(editor, i) {
   };
 
   editor.appendChild(h('div', { class: 'editor-head' }, h('h2', null, t.problemTitle || '试题'), status,
+    h('button', { class: 'small right', disabled, onclick: () => importHydroConfig(i) }, '导入 Hydro 配置'),
     disabled ? h('span', { class: 'error-text small-text' }, '评测中，暂不可修改') : null));
   editor.appendChild(grid);
   if (isComm) {
@@ -1173,6 +1247,79 @@ async function addTestCasesWizard() {
   search();
 }
 
+async function importHydroConfig(taskIndex) {
+  try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
+  const task = S.contest.tasks[taskIndex];
+  const firstInput = task.testCases[0]?.inputFiles[0] || '';
+  const defaultBase = firstInput.includes('/') ? firstInput.slice(0, firstInput.lastIndexOf('/'))
+    : S.dataFiles.some(file => file.startsWith(task.sourceFileName + '/')) ? task.sourceFileName : '';
+  let parsed = null, busy = false;
+  const status = h('div', { class: 'small-text', style: { marginTop: '8px' } });
+  const warnings = h('ul', { class: 'import-warnings' });
+  const compile = h('input', { type: 'checkbox', checked: true });
+  const compileRow = h('label', { class: 'inline hidden' }, compile, '编译配置中的校验器源码');
+  const invalidate = () => { parsed = null; apply.disabled = true; status.textContent = ''; warnings.replaceChildren(); compileRow.classList.add('hidden'); };
+  const area = h('textarea', { class: 'code-editor hydro-config', spellcheck: 'false', 'aria-label': 'Hydro 配置', placeholder: '在此粘贴 config.yaml', oninput: invalidate });
+  const base = h('input', { type: 'text', class: 'mono', value: defaultBase, placeholder: 'data 内目录，可留空', 'aria-label': '数据目录', oninput: invalidate });
+  const preview = () => {
+    try {
+      parsed = LemonHydro.parse(area.value, { task: S.contest.tasks[taskIndex], files: S.dataFiles, base: base.value.trim(), defaults: S.settings });
+      const count = parsed.patch.testCases?.length;
+      status.className = 'small-text';
+      status.textContent = count === undefined ? '配置已解析' : `${count} 个子任务，${parsed.tests} 个测试点`;
+      warnings.replaceChildren(...parsed.warnings.map(message => h('li', null, message)));
+      compileRow.classList.toggle('hidden', !parsed.checkerSource);
+      apply.disabled = !Object.keys(parsed.patch).length && !parsed.checkerSource;
+      if (apply.disabled) status.textContent = '没有可导入的配置';
+    } catch (error) {
+      parsed = null; apply.disabled = true; status.className = 'small-text error-text'; status.textContent = error.message;
+      warnings.replaceChildren(); compileRow.classList.add('hidden');
+    }
+  };
+  const local = h('button', { class: 'small', onclick: () => {
+    const file = h('input', { type: 'file', accept: '.yaml,.yml,.json' });
+    file.onchange = async () => {
+      const selected = file.files[0]; if (!selected) return;
+      if (selected.size > 512 * 1024) return toast('配置不能超过 512 KiB', 'error');
+      area.value = await selected.text(); invalidate(); preview();
+    };
+    file.click();
+  } }, '选择本地文件');
+  let apply;
+  const dialog = modal({ title: '导入 Hydro 配置',
+    body: h('div', { style: { width: 'min(800px, 84vw)' } },
+      h('div', { class: 'row', style: { marginBottom: '8px' } }, local, h('span', { class: 'muted small-text' }, '或粘贴 YAML / JSON')),
+      area, h('div', { class: 'row', style: { marginTop: '8px' } }, h('span', null, '数据目录'), base,
+        h('button', { class: 'small', onclick: preview }, '解析')),
+      status, warnings, compileRow),
+    buttons: [{ label: '取消' }, { label: '导入', primary: true, onClick: async () => {
+      if (!parsed || busy) return false;
+      busy = true; area.disabled = base.disabled = local.disabled = compile.disabled = true;
+      try {
+        const patch = { ...parsed.patch };
+        let compileFailed = false;
+        if (parsed.checkerSource && compile.checked) {
+          status.textContent = '编译校验器…';
+          const result = await api('POST', cpath() + '/files/compile', { root: 'data', path: parsed.checkerSource.path });
+          if (result.ok) { patch.specialJudge = result.executable; patch.comparisonMode = parsed.checkerSource.comparisonMode; }
+          else {
+            compileFailed = true;
+            warnings.appendChild(h('li', { class: 'error-text' }, '校验器编译失败，已跳过：', h('pre', null, result.output)));
+          }
+        }
+        if (Object.keys(patch).length) await saveTask(taskIndex, patch);
+        await reloadContest(); await rerenderTasks();
+        toast('配置已导入');
+        if (compileFailed) { status.textContent = '其余配置已导入，可关闭或修正后重试'; return false; }
+        return true;
+      } catch (error) { status.className = 'small-text error-text'; status.textContent = error.message; return false; }
+      finally { busy = false; area.disabled = base.disabled = local.disabled = compile.disabled = false; }
+    } }],
+    beforeClose: () => !busy,
+  });
+  apply = dialog.foot.lastChild; apply.disabled = true;
+}
+
 // ---------------------------------------- test case manager (ExtTestCaseModifier) ----------
 async function openTestCaseManager(taskIndex) {
   try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
@@ -1187,9 +1334,16 @@ async function openTestCaseManager(taskIndex) {
   const D = S.settings;
 
   const snapshot = () => { undo.push(JSON.stringify(cases)); if (undo.length > 200) undo.shift(); redo.length = 0; };
-  const commit = (fn) => { snapshot(); fn(); draw(); };
-  const doUndo = () => { if (!undo.length) return; redo.push(JSON.stringify(cases)); cases = JSON.parse(undo.pop()); sel = { subs: new Set(), cases: new Set() }; draw(); };
-  const doRedo = () => { if (!redo.length) return; undo.push(JSON.stringify(cases)); cases = JSON.parse(redo.pop()); sel = { subs: new Set(), cases: new Set() }; draw(); };
+  const commit = (fn) => {
+    const before = JSON.stringify(cases), previous = { subs: new Set(sel.subs), cases: new Set(sel.cases) };
+    try {
+      fn();
+      if (JSON.stringify(cases) !== before) { undo.push(before); if (undo.length > 200) undo.shift(); redo.length = 0; anchor = null; }
+      draw();
+    } catch (error) { cases = JSON.parse(before); sel = previous; fail(error); draw(); }
+  };
+  const doUndo = () => { if (!undo.length) return; redo.push(JSON.stringify(cases)); cases = JSON.parse(undo.pop()); sel = { subs: new Set(), cases: new Set() }; anchor = null; draw(); };
+  const doRedo = () => { if (!redo.length) return; undo.push(JSON.stringify(cases)); cases = JSON.parse(redo.pop()); sel = { subs: new Set(), cases: new Set() }; anchor = null; draw(); };
 
   // Rebuild the list keeping dependencies consistent. items: [{tc, from:[old indices]}]
   const rebuild = (items) => {
@@ -1199,18 +1353,22 @@ async function openTestCaseManager(taskIndex) {
       const tc = clone(it.tc);
       if (it.from.length) {
         const deps = new Set();
-        for (const o of it.from) for (const d of cases[o].dependenceSubtask) for (const m of (where.get(d - 1) || [])) if (m < j) deps.add(m + 1);
+        for (const o of it.from) for (const d of cases[o].dependenceSubtask) for (const m of (where.get(d - 1) || [])) {
+          if (m > j) throw new Error('依赖的子任务须排在前面');
+          if (m < j) deps.add(m + 1);
+        }
         tc.dependenceSubtask = [...deps].sort((a, b) => a - b);
       }
       return tc;
     });
   };
   const keep = () => cases.map((tc, i) => ({ tc, from: [i] }));
-  const selectedSubs = () => [...sel.subs].sort((a, b) => a - b);
+  const selectedSubs = () => [...new Set([...sel.subs, ...[...sel.cases].map(key => +key.split(':')[0])])].sort((a, b) => a - b);
   const newCase = () => ({ fullScore: D.defaultFullScore, timeLimit: D.defaultTimeLimit, memoryLimit: D.defaultMemoryLimit, inputFiles: [], outputFiles: [], dependenceSubtask: [] });
 
   // ---------- operations ----------
   const moveSubs = (dir) => {
+    if (sel.cases.size) return moveCases(dir);
     const s = selectedSubs();
     if (!s.length) return moveCases(dir);
     if (dir < 0 ? s[0] === 0 : s[s.length - 1] === cases.length - 1) return;
@@ -1226,7 +1384,7 @@ async function openTestCaseManager(taskIndex) {
     const list = [...sel.cases].map((x) => x.split(':').map(Number));
     if (!list.length) return;
     const sub = list[0][0];
-    if (list.some(([i]) => i !== sub)) return toast('只能在同一个测试点内移动数据', 'error');
+    if (list.some(([i]) => i !== sub)) return toast('只能在同一子任务内移动测试点', 'error');
     const ks = list.map(([, k]) => k).sort((a, b) => a - b);
     const tc = cases[sub];
     if (dir < 0 ? ks[0] === 0 : ks[ks.length - 1] === tc.inputFiles.length - 1) return;
@@ -1256,7 +1414,7 @@ async function openTestCaseManager(taskIndex) {
   };
   const merge = () => {
     const s = selectedSubs();
-    if (s.length < 2) return toast('请选择至少两个测试点', 'error');
+    if (s.length < 2) return toast('请选择至少两个子任务', 'error');
     commit(() => {
       const first = s[0];
       const merged = clone(cases[first]);
@@ -1268,7 +1426,7 @@ async function openTestCaseManager(taskIndex) {
       const items = [];
       cases.forEach((tc, i) => {
         if (i === first) items.push({ tc: merged, from: s });
-        else if (!sel.subs.has(i)) items.push({ tc, from: [i] });
+        else if (!s.includes(i)) items.push({ tc, from: [i] });
       });
       cases = rebuild(items);
       sel = { subs: new Set([first]), cases: new Set() };
@@ -1276,7 +1434,7 @@ async function openTestCaseManager(taskIndex) {
   };
   const split = () => {
     const s = selectedSubs().filter((i) => cases[i].inputFiles.length > 1);
-    if (!s.length) return toast('请选择包含多组数据的测试点', 'error');
+    if (!s.length) return toast('所选子任务没有可拆分的测试点', 'error');
     commit(() => {
       const items = [];
       const newSel = new Set();
@@ -1305,7 +1463,7 @@ async function openTestCaseManager(taskIndex) {
   const addCase = () => {
     const s = selectedSubs();
     const target = s.length ? s[s.length - 1] : [...sel.cases].length ? +[...sel.cases][0].split(':')[0] : -1;
-    if (target < 0) return toast('请先选择一个测试点', 'error');
+    if (target < 0) return toast('先选择子任务', 'error');
     commit(() => {
       cases[target].inputFiles.push('');
       cases[target].outputFiles.push('');
@@ -1313,7 +1471,7 @@ async function openTestCaseManager(taskIndex) {
     });
   };
   const moveCasesTo = (target) => {
-    const list = [...sel.cases].map((x) => x.split(':').map(Number));
+    const list = [...sel.cases].map((x) => x.split(':').map(Number)).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     if (!list.length) return;
     commit(() => {
       const moved = [];
@@ -1325,7 +1483,13 @@ async function openTestCaseManager(taskIndex) {
       }
       const start = cases[target].inputFiles.length;
       for (const [a, b] of moved) { cases[target].inputFiles.push(a); cases[target].outputFiles.push(b); }
-      sel = { subs: new Set(), cases: new Set(moved.map((_, n) => `${target}:${start + n}`)) };
+      const emptied = [...drop.keys()].filter(i => i !== target && !cases[i].inputFiles.length);
+      for (const i of emptied) cases[target].fullScore += cases[i].fullScore;
+      const items = keep().filter((_, i) => !emptied.includes(i));
+      const nextTarget = items.findIndex(item => item.from[0] === target);
+      items[nextTarget].from.push(...emptied);
+      cases = rebuild(items);
+      sel = { subs: new Set(), cases: new Set(moved.map((_, n) => `${nextTarget}:${start + n}`)) };
     });
   };
   const moveSubsBefore = (target) => {
@@ -1342,7 +1506,8 @@ async function openTestCaseManager(taskIndex) {
     });
   };
   const batch = () => {
-    const targets = sel.subs.size ? selectedSubs() : cases.map((_, i) => i);
+    const selected = selectedSubs();
+    const targets = selected.length ? selected : cases.map((_, i) => i);
     if (!targets.length) return;
     const mk = (label, value) => {
       const c = h('input', { type: 'checkbox' });
@@ -1352,10 +1517,15 @@ async function openTestCaseManager(taskIndex) {
     const t0 = cases[targets[0]];
     const sc = mk('分值', t0.fullScore), tl = mk('时限 ms', t0.timeLimit), ml = mk('内存 MiB', t0.memoryLimit), tot = mk('总分平均分配', '');
     modal({
-      title: sel.subs.size ? `修改选中的 ${targets.length} 个测试点` : `修改全部 ${targets.length} 个测试点`,
+      title: selected.length ? `修改 ${targets.length} 个子任务` : `修改全部 ${targets.length} 个子任务`,
       body: h('div', { class: 'form-grid', style: { gridTemplateColumns: '110px 1fr' } }, sc.row, tl.row, ml.row, tot.row),
       buttons: [{ label: '取消' }, {
-        label: '应用', primary: true, onClick: () => commit(() => {
+        label: '应用', primary: true, onClick: () => {
+          if ([sc, tot].some(item => item.c.checked && (!Number.isInteger(+item.v.value) || +item.v.value < 0))
+            || [tl, ml].some(item => item.c.checked && (!Number.isInteger(+item.v.value) || +item.v.value <= 0))) {
+            toast('分值须为非负整数，时限和内存须为正整数', 'error'); return false;
+          }
+          commit(() => {
           const total = +tot.v.value, n = targets.length, per = Math.floor(total / n);
           targets.forEach((i, j) => {
             if (sc.c.checked) cases[i].fullScore = +sc.v.value;
@@ -1363,7 +1533,8 @@ async function openTestCaseManager(taskIndex) {
             if (ml.c.checked) cases[i].memoryLimit = +ml.v.value;
             if (tot.c.checked) cases[i].fullScore = per + (j < total - per * n ? 1 : 0);
           });
-        }),
+          });
+        },
       }],
     });
   };
@@ -1371,7 +1542,7 @@ async function openTestCaseManager(taskIndex) {
   // Clicking a cell (not its input) only changes the row selection: with Shift/Ctrl the browser would
   // otherwise extend a text selection over the inputs in between.
   const noTextSelect = (e) => {
-    if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault();
+    e.preventDefault();
     if (document.activeElement && document.activeElement.tagName === 'INPUT' && tbody.contains(document.activeElement)) document.activeElement.blur();
     const s = window.getSelection();
     if (s && s.rangeCount) s.removeAllRanges();
@@ -1379,6 +1550,24 @@ async function openTestCaseManager(taskIndex) {
 
   // ---------- selection ----------
   const flatCases = () => cases.flatMap((tc, i) => tc.inputFiles.map((_, k) => `${i}:${k}`));
+  const selectedData = () => sel.cases.size ? [...sel.cases] : flatCases().filter(key => sel.subs.has(+key.split(':')[0]));
+  const editData = () => {
+    const keys = selectedData();
+    if (!keys.length) return;
+    const rows = keys.map(key => {
+      const [i, k] = key.split(':').map(Number);
+      const input = h('input', { class: 'mono', value: cases[i].inputFiles[k], list: 'datafiles', 'aria-label': '输入文件' });
+      const output = h('input', { class: 'mono', value: cases[i].outputFiles[k], list: 'datafiles', 'aria-label': '输出文件' });
+      return { i, k, input, output };
+    });
+    modal({ title: keys.length === 1 ? '修改测试点' : `修改 ${keys.length} 个测试点`,
+      body: h('table', { class: 'grid boxed' }, h('thead', null, h('tr', null, h('th', null, '测试点'), h('th', null, '输入文件'), h('th', null, '输出文件'))),
+        h('tbody', null, rows.map(row => h('tr', null, h('td', null, `${row.i + 1}:${row.k + 1}`), h('td', null, row.input), h('td', null, row.output))))),
+      buttons: [{ label: '取消' }, { label: '应用', primary: true, onClick: () => commit(() => {
+        for (const row of rows) { cases[row.i].inputFiles[row.k] = row.input.value; cases[row.i].outputFiles[row.k] = row.output.value; }
+      }) }],
+    });
+  };
   const clickSub = (i, e) => {
     sel.cases = new Set();
     if (e.shiftKey && anchor && anchor.type === 'sub') {
@@ -1405,37 +1594,77 @@ async function openTestCaseManager(taskIndex) {
     paint();
   };
 
+  let selectionDrag = null;
+  const startSelection = (e, type, key) => {
+    if (e.button !== 0 || e.target.closest('.tcm-grip') || (e.target.tagName === 'INPUT' && !e.target.readOnly)) return;
+    noTextSelect(e);
+    const base = e.ctrlKey || e.metaKey ? new Set(type === 'sub' ? sel.subs : sel.cases) : new Set();
+    const origin = e.shiftKey && anchor?.type === type ? (type === 'sub' ? anchor.i : anchor.key) : key;
+    if (type === 'sub') clickSub(key, e); else clickCase(key, e);
+    selectionDrag = { type, origin, base, last: key };
+  };
+  const extendSelection = e => {
+    if (!selectionDrag) return;
+    if (!(e.buttons & 1)) { selectionDrag = null; return; }
+    const cell = document.elementFromPoint(e.clientX, e.clientY)?.closest('td');
+    if (!cell || !tbody.contains(cell)) return;
+    const drag = selectionDrag;
+    const key = drag.type === 'sub' ? +(cell.dataset.sub ?? cell.closest('tr').dataset.case?.split(':')[0]) : cell.closest('tr').dataset.case;
+    if (key === undefined || Number.isNaN(key) || key === drag.last) return;
+    drag.last = key;
+    const order = drag.type === 'sub' ? cases.map((_, i) => i) : flatCases();
+    const [a, b] = [order.indexOf(drag.origin), order.indexOf(key)].sort((x, y) => x - y);
+    if (a < 0) return;
+    const selected = new Set([...drag.base, ...order.slice(a, b + 1)]);
+    sel = drag.type === 'sub' ? { subs: selected, cases: new Set() } : { subs: new Set(), cases: selected };
+    window.getSelection()?.removeAllRanges();
+    e.preventDefault(); paint();
+    const bounds = wrap.getBoundingClientRect();
+    if (e.clientY > bounds.bottom - 24) wrap.scrollTop += 20;
+    else if (e.clientY < bounds.top + 24) wrap.scrollTop -= 20;
+  };
+  const endSelection = () => { selectionDrag = null; };
+  const inlineEdit = (input) => {
+    input.readOnly = true;
+    input.addEventListener('blur', () => { input.readOnly = true; });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'F2') { e.preventDefault(); input.readOnly = false; }
+      else if (e.key === 'Enter' || e.key === 'Escape') input.blur();
+    });
+    return input;
+  };
+
   // ---------- rendering ----------
   const tbody = h('tbody');
   const info = h('span', { class: 'tcm-foot-info' });
   const btn = {};
   const mkBtn = (key, label, fn, title) => (btn[key] = h('button', { class: 'small', onclick: fn, title }, label));
   const toolbar = h('div', { class: 'tcm-toolbar' },
-    mkBtn('addSub', '＋ 测试点', addSub), mkBtn('addCase', '＋ 数据', addCase, '向选中的测试点添加一组数据'),
+    mkBtn('addSub', '＋ 子任务', addSub), mkBtn('addCase', '＋ 测试点', addCase),
     h('div', { class: 'sep' }),
     mkBtn('up', '上移', () => moveSubs(-1), 'Alt+↑'), mkBtn('down', '下移', () => moveSubs(1), 'Alt+↓'),
-    mkBtn('merge', '合并', merge, '把选中的测试点合并为一个（捆绑）'), mkBtn('split', '拆分', split, '把测试点中的每组数据拆成单独的测试点'),
-    mkBtn('batch', '批量修改', batch), mkBtn('moveTo', '移到测试点…', (e) => menuBelow(e.currentTarget, cases.map((tc, i) => ({ label: `#${i + 1}`, count: `${tc.inputFiles.length} 组`, onClick: () => moveCasesTo(i) })))),
+    mkBtn('merge', '合并子任务', merge), mkBtn('split', '拆分子任务', split),
+    mkBtn('batch', '批量修改', batch), mkBtn('moveTo', '绑定到…', (e) => menuBelow(e.currentTarget, cases.map((tc, i) => ({ label: `子任务 #${i + 1}`, count: `${tc.inputFiles.length} 点`, onClick: () => moveCasesTo(i) })))),
     h('div', { class: 'sep' }),
     h('button', { class: 'small danger', onclick: removeSel, title: 'Delete' }, '删除'),
     h('div', { class: 'right row' }, mkBtn('undo', '↶ 撤销', doUndo, 'Ctrl+Z'), mkBtn('redo', '↷ 重做', doRedo, 'Ctrl+Y')));
 
-  const numInput = (i, key, cls = 'num') => h('input', {
+  const numInput = (i, key, cls = 'num') => inlineEdit(h('input', {
     type: 'number', class: cls, value: cases[i][key],
     onfocus: snapshotOnce, oninput: (e) => { cases[i][key] = +e.target.value; updateInfo(); },
-  });
+  }));
   let focusSnap = false;
   function snapshotOnce() { if (!focusSnap) { snapshot(); focusSnap = true; setTimeout(() => { focusSnap = false; }, 1500); } }
   const pathInput = (i, k, key) => {
-    const inp = h('input', {
+    const inp = inlineEdit(h('input', {
       type: 'text', class: 'path mono' + (cases[i][key][k] && !dataSet.has(cases[i][key][k]) ? ' missing' : ''), value: cases[i][key][k], list: 'datafiles',
-      title: cases[i][key][k] && !dataSet.has(cases[i][key][k]) ? 'data 中没有这个文件' : '',
+      title: cases[i][key][k] && !dataSet.has(cases[i][key][k]) ? '文件不存在' : '',
       onfocus: snapshotOnce,
       oninput: (e) => { cases[i][key][k] = e.target.value; e.target.classList.toggle('missing', !!e.target.value && !dataSet.has(e.target.value)); updateInfo(); },
-    });
+    }));
     return inp;
   };
-  const depInput = (i) => h('input', {
+  const depInput = (i) => inlineEdit(h('input', {
     type: 'text', class: 'num', value: cases[i].dependenceSubtask.join(','), placeholder: i ? '—' : '', disabled: i === 0, title: '依赖的测试点编号',
     onfocus: snapshotOnce,
     oninput: (e) => {
@@ -1444,7 +1673,7 @@ async function openTestCaseManager(taskIndex) {
       e.target.classList.toggle('missing', !ok);
       if (ok) cases[i].dependenceSubtask = [...new Set(list)].sort((a, b) => a - b);
     },
-  });
+  }));
 
   let dragInfo = null;
   function draw() {
@@ -1453,27 +1682,29 @@ async function openTestCaseManager(taskIndex) {
       const n = Math.max(1, tc.inputFiles.length);
       const subCell = (content, extra = {}) => {
         const td = h('td', { class: 'sub', rowspan: n, 'data-sub': i, ...extra }, content);
-        td.addEventListener('mousedown', (e) => { if (e.target.tagName !== 'INPUT') { noTextSelect(e); clickSub(i, e); } });
+        td.addEventListener('mousedown', e => startSelection(e, 'sub', i));
         return td;
       };
       for (let k = 0; k < n; k++) {
-        const row = h('tr', { class: 'case' + (k === 0 ? ' group-start' : '') });
+        const row = h('tr', { class: 'case' + (k === 0 ? ' group-start' : '') + (i % 2 ? ' group-alt' : '') });
         if (k === 0) {
-          const handle = subCell(h('div', { class: 'tcm-subhead' }, h('span', { class: 'idx' }, '#' + (i + 1)), h('span', { class: 'muted small-text' }, tc.inputFiles.length + ' 组')), { draggable: 'true', title: '拖动以调整顺序' });
-          handle.addEventListener('dragstart', (e) => { if (!sel.subs.has(i)) clickSub(i, {}); dragInfo = { type: 'sub' }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'sub'); });
+          const grip = h('span', { class: 'tcm-grip', draggable: 'true', title: '拖动排序' }, '⠿');
+          const handle = subCell(h('div', { class: 'tcm-subhead' }, grip, h('span', { class: 'idx' }, '#' + (i + 1)), h('span', { class: 'muted small-text' }, tc.inputFiles.length + ' 点')));
+          grip.addEventListener('dragstart', (e) => { endSelection(); if (!sel.subs.has(i)) clickSub(i, {}); dragInfo = { type: 'sub' }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'sub'); });
           row.append(handle, subCell(numInput(i, 'fullScore')), subCell(numInput(i, 'timeLimit')), subCell(numInput(i, 'memoryLimit')), subCell(depInput(i)));
           row.dataset.subStart = i;
         }
         const key = `${i}:${k}`;
         if (tc.inputFiles.length) {
-          const idx = h('td', { class: 'c center muted', draggable: 'true' }, k + 1);
-          idx.addEventListener('dragstart', (e) => { if (!sel.cases.has(key)) clickCase(key, {}); dragInfo = { type: 'case' }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'case'); });
+          const grip = h('span', { class: 'tcm-grip', draggable: 'true', title: '拖动绑定' }, '⠿');
+          const idx = h('td', { class: 'c center muted' }, grip, k + 1);
+          grip.addEventListener('dragstart', (e) => { endSelection(); if (!sel.cases.has(key)) clickCase(key, {}); dragInfo = { type: 'case' }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'case'); });
           const c1 = h('td', { class: 'c' }, pathInput(i, k, 'inputFiles'));
           const c2 = h('td', { class: 'c' }, pathInput(i, k, 'outputFiles'));
-          for (const td of [idx, c1, c2]) td.addEventListener('mousedown', (e) => { if (e.target.tagName !== 'INPUT') { noTextSelect(e); clickCase(key, e); } });
+          for (const td of [idx, c1, c2]) td.addEventListener('mousedown', e => startSelection(e, 'case', key));
           row.append(idx, c1, c2);
           row.dataset.case = key;
-        } else row.append(h('td', { colspan: 3, class: 'muted small-text c' }, '（没有数据）'));
+        } else row.append(h('td', { colspan: 3, class: 'muted small-text c' }, '暂无测试点'));
         row.addEventListener('dragover', (e) => { if (!dragInfo) return; e.preventDefault(); tbody.querySelectorAll('.tcm-drop-before').forEach((x) => x.classList.remove('tcm-drop-before')); const start = tbody.querySelector(`tr[data-sub-start="${i}"]`); if (start) start.classList.add('tcm-drop-before'); });
         row.addEventListener('drop', (e) => {
           e.preventDefault();
@@ -1486,25 +1717,25 @@ async function openTestCaseManager(taskIndex) {
       }
     });
     // drop zone at the end
-    const end = h('tr', null, h('td', { colspan: 8, class: 'muted small-text center', style: { padding: '8px' } }, cases.length ? '拖到这里移到末尾' : '暂无测试点'));
+    const end = h('tr', null, h('td', { colspan: 8, class: 'muted small-text center', style: { padding: '8px' } }, cases.length ? '移到末尾' : '暂无子任务'));
     end.addEventListener('dragover', (e) => { if (dragInfo && dragInfo.type === 'sub') e.preventDefault(); });
     end.addEventListener('drop', (e) => { e.preventDefault(); if (dragInfo && dragInfo.type === 'sub') moveSubsBefore(cases.length); dragInfo = null; });
     tbody.appendChild(end);
     paint();
   }
   function paint() {
-    tbody.querySelectorAll('td.sub').forEach((td) => td.classList.toggle('selected', sel.subs.has(+td.dataset.sub)));
-    tbody.querySelectorAll('tr.case').forEach((tr) => tr.classList.toggle('selected', !!tr.dataset.case && sel.cases.has(tr.dataset.case)));
     const s = selectedSubs();
-    btn.up.disabled = !(s.length ? s[0] > 0 : sel.cases.size);
-    btn.down.disabled = !(s.length ? s[s.length - 1] < cases.length - 1 : sel.cases.size);
+    tbody.querySelectorAll('td.sub').forEach((td) => td.classList.toggle('selected', s.includes(+td.dataset.sub)));
+    tbody.querySelectorAll('tr.case').forEach((tr) => tr.classList.toggle('selected', !!tr.dataset.case && (sel.cases.has(tr.dataset.case) || sel.subs.has(+tr.dataset.case.split(':')[0]))));
+    btn.up.disabled = !(sel.cases.size || s.length && s[0] > 0);
+    btn.down.disabled = !(sel.cases.size || s.length && s[s.length - 1] < cases.length - 1);
     btn.merge.disabled = s.length < 2;
     btn.split.disabled = !s.some((i) => cases[i].inputFiles.length > 1);
     btn.addCase.disabled = !s.length && !sel.cases.size;
     btn.moveTo.disabled = !sel.cases.size;
     btn.undo.disabled = !undo.length;
     btn.redo.disabled = !redo.length;
-    btn.batch.textContent = s.length ? `批量修改（${s.length}）` : '批量修改（全部）';
+    btn.batch.textContent = s.length ? `修改子任务（${s.length}）` : '修改全部子任务';
     updateInfo();
   }
   function updateInfo() {
@@ -1512,13 +1743,39 @@ async function openTestCaseManager(taskIndex) {
     const files = cases.reduce((a, tc) => a + tc.inputFiles.length, 0);
     const missing = cases.reduce((a, tc) => a + [...tc.inputFiles, ...tc.outputFiles].filter((f) => f && !dataSet.has(f)).length, 0);
     const empty = cases.reduce((a, tc) => a + [...tc.inputFiles, ...tc.outputFiles].filter((f) => !f).length, 0);
-    info.textContent = `${cases.length} 个测试点 · ${files} 组数据 · 总分 ${total}` + (missing ? ` · ${missing} 个文件不存在` : '') + (empty ? ` · ${empty} 个路径为空` : '') + (JSON.stringify(cases) !== original ? ' · 未保存' : '');
+    info.textContent = `${cases.length} 个子任务 · ${files} 个测试点 · 总分 ${total}` + (missing ? ` · ${missing} 个文件不存在` : '') + (empty ? ` · ${empty} 个路径为空` : '') + (JSON.stringify(cases) !== original ? ' · 未保存' : '');
   }
 
   const table = h('table', { class: 'tcm-table' },
-    h('thead', null, h('tr', null, h('th', { style: { width: '74px' } }, '测试点'), h('th', null, '分值'), h('th', null, '时限 ms'), h('th', null, '内存 MiB'), h('th', null, '依赖'), h('th', { style: { width: '34px' } }, '#'), h('th', null, '输入文件'), h('th', null, '输出文件'))),
+    h('thead', null, h('tr', null, h('th', { style: { width: '110px' } }, '子任务'), h('th', null, '分值'), h('th', null, '时限 ms'), h('th', null, '内存 MiB'), h('th', null, '依赖'), h('th', { style: { width: '54px' } }, '点'), h('th', null, '输入文件'), h('th', null, '输出文件'))),
     tbody);
   const wrap = h('div', { class: 'tcm-wrap' }, table);
+  wrap.addEventListener('dragend', () => { dragInfo = null; tbody.querySelectorAll('.tcm-drop-before').forEach(row => row.classList.remove('tcm-drop-before')); });
+  tbody.addEventListener('dblclick', e => {
+    const input = e.target.closest('td')?.querySelector('input');
+    if (!input || input.disabled) return;
+    input.readOnly = false; input.focus(); if (input.type === 'text') input.select();
+  });
+  tbody.addEventListener('contextmenu', e => {
+    const cell = e.target.closest('td'); if (!cell) return;
+    e.preventDefault(); endSelection();
+    const key = cell.closest('tr').dataset.case, sub = +(cell.dataset.sub ?? key?.split(':')[0]);
+    if (Number.isNaN(sub)) return;
+    if (cell.classList.contains('sub')) { if (!selectedSubs().includes(sub)) clickSub(sub, {}); }
+    else if (key && !sel.cases.has(key) && !sel.subs.has(sub)) clickCase(key, {});
+    showMenu(e.clientX, e.clientY, [
+      { label: selectedData().length > 1 ? '批量修改测试点…' : '修改测试点…', disabled: !selectedData().length, onClick: editData },
+      { label: '修改子任务…', onClick: batch },
+      { label: '绑定到子任务…', disabled: !sel.cases.size, onClick: () => showMenu(e.clientX, e.clientY, cases.map((tc, i) => ({ label: `#${i + 1}`, onClick: () => moveCasesTo(i) }))) },
+      'sep', { label: '合并子任务', disabled: selectedSubs().length < 2, onClick: merge },
+      { label: '拆分子任务', disabled: !selectedSubs().some(i => cases[i].inputFiles.length > 1), onClick: split },
+      { label: '上移', onClick: () => moveSubs(-1) }, { label: '下移', onClick: () => moveSubs(1) },
+      'sep', { label: '新增子任务', onClick: addSub }, { label: '新增测试点', onClick: addCase },
+      { label: sel.cases.size ? '删除测试点' : '删除子任务', danger: true, onClick: removeSel },
+    ]);
+  });
+  document.addEventListener('mousemove', extendSelection);
+  document.addEventListener('mouseup', endSelection);
   const save = async () => {
     const empty = cases.some((tc) => tc.inputFiles.some((f, k) => !f || !tc.outputFiles[k]));
     if (empty && !await confirmDlg('有数据路径为空，仍要保存吗？', '保存', false)) return false;
@@ -1543,10 +1800,10 @@ async function openTestCaseManager(taskIndex) {
   const dlg = modal({
     title: `测试点管理 · ${task.problemTitle}`,
     body: h('div', { class: 'tcm' }, toolbar, wrap,
-      h('div', { class: 'row', style: { marginTop: '8px' } }, info, h('span', { class: 'right muted small-text' }, '单击选择 · Ctrl/Shift 多选 · 拖动 # 调整顺序 · Ctrl+Z 撤销 · Ctrl+S 保存'))),
+      h('div', { class: 'row', style: { marginTop: '8px' } }, info, h('span', { class: 'right muted small-text' }, '拖动选择 · 双击编辑 · 右键操作'))),
     buttons: [{ label: '取消' }, { label: '保存', primary: true, onClick: save }],
     beforeClose: async () => JSON.stringify(cases) === original || confirmDlg('放弃对测试点的修改？', '放弃'),
-    onClose: () => document.removeEventListener('keydown', keyHandler, true),
+    onClose: () => { document.removeEventListener('keydown', keyHandler, true); document.removeEventListener('mousemove', extendSelection); document.removeEventListener('mouseup', endSelection); },
   });
   document.addEventListener('keydown', keyHandler, true);
   draw();
@@ -1760,7 +2017,7 @@ async function rejudgeByStateMenu(anchor) {
     { head: '编译' },
     ...REJUDGE_COMPILE.map((s) => item(COMPILE_ABBR[s], COMPILE_STATE[s], sum.compile[s], { compileStates: [s] })),
     'sep',
-    { head: '测试点结果（含有该结果的格子）' },
+    { head: '测试点结果' },
     ...REJUDGE_RESULT.map((s) => item(RESULT_ABBR[s], RESULT[s][0], sum.result[s], { resultStates: [s] })),
   ]);
 }
@@ -2372,7 +2629,25 @@ async function chooseTemplate() {
 }
 
 // Compile a source file on the server with Testlib for Lemons, optionally using it as a task's checker.
-function compileDialog(path, onDone) {
+function pickDataFile(title, accept = null) {
+  return new Promise(resolve => {
+    let selected = null;
+    const list = h('select', { size: 12, style: { width: '100%', maxWidth: 'none' }, 'aria-label': '数据文件' });
+    const filter = h('input', { type: 'search', placeholder: '筛选文件', style: { width: '100%', maxWidth: 'none', marginBottom: '8px' }, oninput: draw });
+    function draw() {
+      const needle = filter.value.toLowerCase();
+      const matches = S.dataFiles.filter(file => (!accept || accept.test(file)) && file.toLowerCase().includes(needle));
+      list.replaceChildren(...(matches.length ? matches.map(file => h('option', { value: file }, file)) : [h('option', { value: '', disabled: true }, '暂无匹配文件')]));
+    }
+    const choose = () => { if (!list.value) return false; selected = list.value; };
+    const dialog = modal({ title, body: h('div', { style: { width: '500px', maxWidth: '80vw' } }, filter, list),
+      buttons: [{ label: '取消' }, { label: '选择', primary: true, onClick: choose }], onClose: () => resolve(selected) });
+    list.ondblclick = () => { if (choose() !== false) dialog.close(true); };
+    draw();
+  });
+}
+
+function compileDialog(path, onDone, options = {}) {
   const ext = (path.split('.').pop() || '').toLowerCase();
   const out = h('input', { type: 'text', class: 'mono', value: path.replace(/\.[^./]+$/, ''), style: { maxWidth: 'none' } });
   const typical = S.compilers.filter((c) => c.compilerType === 0);
@@ -2396,8 +2671,9 @@ function compileDialog(path, onDone) {
         built = r.executable;
         status.className = 'small-text status-saved';
         status.textContent = `✓ 已生成 ${r.executable} · ${r.compiler} · ${r.seconds.toFixed(1)} s`;
-        if (built.startsWith('data/') && S.contest.tasks.length) after.appendChild(useAsChecker(built.slice(5)));
-        if (onDone) onDone(built);
+        if (options.assign !== false && built.startsWith('data/') && S.contest.tasks.length) after.appendChild(useAsChecker(built.slice(5)));
+        if (onDone) await onDone(built);
+        if (options.closeOnSuccess) { dlg.close(true); toast('校验器已更新'); }
       } else {
         status.className = 'small-text error-text';
         status.textContent = r.timedOut ? '✗ 编译超时' : `✗ 编译失败（退出码 ${r.exitCode}）`;
@@ -2407,7 +2683,7 @@ function compileDialog(path, onDone) {
   const body = h('div', { style: { width: '640px' } },
     h('div', { class: 'form-grid', style: { gridTemplateColumns: '90px 1fr' } },
       field('源文件', h('span', { class: 'mono' }, '/' + path)),
-      field('输出', out, 'Windows 下会自动加上 .exe'),
+      field('输出', out),
       field('编译器', comp),
       field('参数', args),
       field('', h('label', { class: 'inline' }, bundled, '使用内置的 Testlib for Lemons（testlib.h）'))),

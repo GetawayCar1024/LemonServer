@@ -139,6 +139,10 @@ table.boxed td:last-child, table.boxed th:last-child { border-right: none; }
 .tree-item.selected .score, .tree-item.selected .twisty { color: rgba(255, 255, 255, .85); }
 .tree-item.child { padding-left: 30px; }
 .tree-item.drop { box-shadow: inset 0 0 0 2px var(--blue); background: var(--sel); }
+.tree-item.task-drop-before { box-shadow: inset 0 2px 0 var(--blue); }
+.tree-item.task-drop-after { box-shadow: inset 0 -2px 0 var(--blue); }
+.tree-item[draggable=true] { cursor: grab; }
+.tree-item[draggable=true]:active { cursor: grabbing; }
 .tree-item .twisty { width: 14px; text-align: center; color: var(--muted); font-size: 11px; flex: none; }
 .tree-item .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-item .score { margin-left: auto; color: var(--muted); font-size: 12px; flex: none; }
@@ -188,6 +192,9 @@ table.files tr.file-row:hover .actions { visibility: visible; }
 
 /* text editor */
 .code-editor { width: min(1000px, 88vw); height: 62vh; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; line-height: 1.5; tab-size: 4; white-space: pre; border-radius: var(--radius); background: var(--panel-2); }
+.hydro-config { width: 100%; height: 36vh; min-height: 180px; }
+.import-warnings { max-height: 18vh; overflow: auto; padding-left: 22px; color: var(--muted); font-size: 12.5px; }
+.import-warnings:empty { display: none; }
 
 /* ---------- modal ---------- */
 .modal-back { position: fixed; inset: 0; background: var(--backdrop); display: flex; align-items: center; justify-content: center; z-index: 100; animation: fade .15s; }
@@ -310,21 +317,26 @@ table.files td.name { cursor: default; }
 table.tcm-table { border-collapse: separate; border-spacing: 0; width: 100%; }
 table.tcm-table th, table.tcm-table td { border-bottom: 1px solid var(--sep); padding: 4px 6px; vertical-align: middle; }
 table.tcm-table th { background: var(--panel-2); position: sticky; top: 0; z-index: 2; font-size: 12.5px; text-align: left; }
-table.tcm-table td.sub { border-right: 1px solid var(--sep); background: var(--panel-2); cursor: pointer; vertical-align: top; padding-top: 7px; }
-table.tcm-table td.sub.selected, table.tcm-table tr.case.selected td.c { background: var(--sel); }
+table.tcm-table td.sub { border-right: 1px solid var(--sep); cursor: pointer; vertical-align: top; padding-top: 7px; }
+table.tcm-table tr.case td { background: var(--panel); }
+table.tcm-table tr.case.group-alt td { background: var(--panel-2); }
+table.tcm-table tr.case td.sub.selected, table.tcm-table tr.case.selected td.c { background: var(--sel); }
 table.tcm-table tr.case td.c { cursor: pointer; }
 table.tcm-table tr.group-start td { border-top: 2px solid var(--sep-strong); }
 table.tcm-table input { padding: 3px 6px; font-size: 12.5px; border-radius: 6px; }
 table.tcm-table input.num { width: 76px; }
 table.tcm-table input.path { width: 100%; min-width: 160px; }
 table.tcm-table input.missing { border-color: var(--danger); color: var(--danger); }
-.tcm-subhead { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.tcm-subhead { display: flex; align-items: center; gap: 6px; font-weight: 600; white-space: nowrap; }
 .tcm-subhead .idx { min-width: 30px; }
+.tcm-grip { display: inline-block; padding: 2px 4px; cursor: grab; color: var(--muted); user-select: none; }
+.tcm-grip:active { cursor: grabbing; }
 .tcm-foot-info { font-size: 12.5px; color: var(--muted); }
 .tcm-drop-before td { box-shadow: inset 0 2px 0 var(--blue); }.tcm-toolbar .sep { width: 1px; height: 18px; background: var(--sep-strong); margin: 0 4px; }
 /* selecting rows with Shift/Ctrl must not select the text of the inputs in between */
 table.tcm-table td.sub, table.tcm-table tr.case td.c { user-select: none; -webkit-user-select: none; }
 table.tcm-table input { user-select: text; -webkit-user-select: text; }
+table.tcm-table input[readonly] { pointer-events: none; user-select: none; -webkit-user-select: none; cursor: default; background: transparent; border-color: transparent; box-shadow: none; }
 
 /* results: cells not judged yet */
 table.results .unjudged { color: var(--muted); font-size: 12px; }
