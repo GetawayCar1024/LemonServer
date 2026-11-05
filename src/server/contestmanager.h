@@ -66,7 +66,7 @@ class ContestManager : public QObject {
 
 	// LemonLime main-window features (current contest)
 	QJsonArray scanNewTasks() const;
-	int addTasks(const QJsonArray &tasks);
+	int addTasks(const QJsonArray &tasks, QString *error = nullptr);
 	QJsonObject cleanupSourceFiles(bool backup);
 	// A file or folder under source/<who>/<rest...> of the current contest was changed through the API:
 	// the results of the affected tasks are outdated, mark them as not judged (so that "unjudged" picks

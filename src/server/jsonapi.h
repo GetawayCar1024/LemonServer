@@ -23,6 +23,9 @@ class TestCase;
 namespace LemonServerJson {
 	QString toApiPath(QString path);
 	QString fromApiPath(QString path);
+	bool isPortableTaskFileName(const QString &name);
+	QString defaultTaskFileName(const QString &title, int ordinal);
+	bool validateTaskFileNames(const Task *, QString *error);
 
 	QJsonObject testCaseToJson(const TestCase *);
 	QJsonObject taskToJson(const Task *);

@@ -6,6 +6,7 @@
  */
 
 #include "contestmanager.h"
+#include "jsonapi.h"
 #include "serverconfig.h"
 
 #include "base/LemonLog.hpp"
@@ -602,8 +603,15 @@ QJsonArray ContestManager::scanNewTasks() const {
 		return result;
 	QStringList list = QDir(Settings::dataPath()).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
 	QSet<QString> nameSet;
-	for (auto *i : contest->getTaskList())
+	QSet<QString> sourceNames;
+	for (auto *i : contest->getTaskList()) {
 		nameSet.insert(i->getSourceFileName());
+		sourceNames.insert(i->getSourceFileName().toCaseFolded());
+		for (const auto *tc : i->getTestCaseList()) for (const auto &file : tc->getInputFiles()) {
+			const QString relative = QDir::fromNativeSeparators(file);
+			if (QDir::isRelativePath(relative) && relative.contains('/')) nameSet.insert(relative.section('/', 0, 0));
+		}
+	}
 
 	for (const auto &dirName : list) {
 		if (nameSet.contains(dirName))
@@ -633,7 +641,12 @@ QJsonArray ContestManager::scanNewTasks() const {
 		QJsonArray arr;
 		for (const auto &[in, out] : cases)
 			arr.append(QJsonArray{in, out});
+		int ordinal = contest->getTaskList().size() + result.size() + 1;
+		QString source = LemonServerJson::defaultTaskFileName(dirName, ordinal);
+		while (sourceNames.contains(source.toCaseFolded())) source = QString("task-%1").arg(++ordinal);
+		sourceNames.insert(source.toCaseFolded());
 		result.append(QJsonObject{{"name", dirName},
+		                          {"sourceFileName", source},
 		                          {"testCases", arr},
 		                          {"fullScore", qMax(100, int(cases.size()))},
 		                          {"timeLimit", settings->getDefaultTimeLimit()},
@@ -642,11 +655,18 @@ QJsonArray ContestManager::scanNewTasks() const {
 	return result;
 }
 
-int ContestManager::addTasks(const QJsonArray &requested) {
+int ContestManager::addTasks(const QJsonArray &requested, QString *error) {
 	// Second half of LemonLime::addTasksAction() / addTaskWithScoreScale()
 	if (! contest)
 		return 0;
 	const auto candidates = scanNewTasks();
+	for (const auto &entry : requested) {
+		const auto request = entry.toObject();
+		if (request.contains("sourceFileName") && (!LemonServerJson::isPortableTaskFileName(request["sourceFileName"].toString()) || request["sourceFileName"].toString().size() > 64)) {
+			if (error) *error = "sourceFileName: use an ASCII file name of at most 64 characters. The display title may contain Chinese.";
+			return 0;
+		}
+	}
 	int added = 0;
 	for (const auto &r : requested) {
 		const auto req = r.toObject();
@@ -655,6 +675,7 @@ int ContestManager::addTasks(const QJsonArray &requested) {
 			if (cand["name"].toString() != req["name"].toString())
 				continue;
 			const QString title = cand["name"].toString();
+			const QString source = req.contains("sourceFileName") ? req["sourceFileName"].toString() : cand["sourceFileName"].toString();
 			const auto testCases = cand["testCases"].toArray();
 			const int sumScore = req.contains("fullScore") ? req["fullScore"].toInt() : cand["fullScore"].toInt();
 			const int timeLimit =
@@ -664,9 +685,9 @@ int ContestManager::addTasks(const QJsonArray &requested) {
 
 			Task *newTask = new Task;
 			newTask->setProblemTitle(title);
-			newTask->setSourceFileName(title);
-			newTask->setInputFileName(title + ".in");
-			newTask->setOutputFileName(title + ".out");
+			newTask->setSourceFileName(source);
+			newTask->setInputFileName(source + ".in");
+			newTask->setOutputFileName(source + ".out");
 			newTask->refreshCompilerConfiguration(settings);
 			newTask->setAnswerFileExtension(settings->getDefaultOutputFileExtension());
 			contest->addTask(newTask);
@@ -1009,6 +1030,13 @@ bool ContestManager::enqueueJudge(const QJsonObject &request, QJsonObject *job, 
 	QMap<QString, QVector<int>> mapping;
 	if (! judgeCells(contest, request, &mapping, error))
 		return false;
+	for (const auto &indices : mapping) for (const int index : indices) {
+		QString invalid;
+		if (!LemonServerJson::validateTaskFileNames(contest->getTask(index), &invalid)) {
+			*error = contest->getTask(index)->getProblemTitle() + ": " + invalid;
+			return false;
+		}
+	}
 	qint64 total = 0;
 	int count = 0;
 	judgeList(contest, mapping, &total, &count);

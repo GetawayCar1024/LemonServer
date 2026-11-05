@@ -105,11 +105,19 @@ auto CaseJudger::getNeedRejudge() const -> bool { return needRejudge; }
 // the whole line/token. The 32-byte cap keeps `result` (a fixed-capacity
 // std::string reserved at 32) from reallocating, which is the hot path of
 // per-test-case comparison.
+static FILE *openComparisonFile(const QString &fileName) {
+#ifdef Q_OS_WIN
+	return _wfopen(reinterpret_cast<const wchar_t *>(fileName.utf16()), L"r");
+#else
+	return fopen(QFile::encodeName(fileName).constData(), "r");
+#endif
+}
+
 class BufferedStreamReader {
 
   public:
 	static const int BUFFER_SIZE = 1 << 18; // 128 KiB
-	explicit BufferedStreamReader(const char *filename) : file(fopen(filename, "r")) {
+	explicit BufferedStreamReader(const QString &filename) : file(openComparisonFile(filename)) {
 		result.reserve(32);
 		// Start with bufPos == bufEnd so the first peekChar() triggers an
 		// fread; avoids a separate "primed?" flag.
@@ -218,20 +226,20 @@ auto BufferedStreamReader::nextUntilSpace() -> std::string_view {
 }
 
 void CaseJudger::compareLineByLine(const QString &contestantOutput) {
-	BufferedStreamReader contestantReader(contestantOutput.toLocal8Bit().data());
-	BufferedStreamReader standardOutputReader(outputFile.toLocal8Bit().data());
+	BufferedStreamReader contestantReader(contestantOutput);
+	BufferedStreamReader standardOutputReader(outputFile);
 
 	if (! contestantReader.valid()) {
 		score = 0;
 		result = FileError;
-		message = tr(R"(Cannot open contestant's output file)");
+		message = tr(R"(Cannot open contestant's output file)") + "\n" + QDir::toNativeSeparators(contestantOutput);
 		return;
 	}
 
 	if (! standardOutputReader.valid()) {
 		score = 0;
 		result = FileError;
-		message = tr(R"(Cannot open standard output file)");
+		message = tr(R"(Cannot open standard output file)") + "\n" + QDir::toNativeSeparators(outputFile);
 		return;
 	}
 
@@ -276,20 +284,20 @@ void CaseJudger::compareLineByLine(const QString &contestantOutput) {
 }
 
 void CaseJudger::compareIgnoreSpaces(const QString &contestantOutput) {
-	BufferedStreamReader contestantReader(contestantOutput.toLocal8Bit().data());
-	BufferedStreamReader standardOutputReader(outputFile.toLocal8Bit().data());
+	BufferedStreamReader contestantReader(contestantOutput);
+	BufferedStreamReader standardOutputReader(outputFile);
 
 	if (! contestantReader.valid()) {
 		score = 0;
 		result = FileError;
-		message = tr(R"(Cannot open contestant's output file)");
+		message = tr(R"(Cannot open contestant's output file)") + "\n" + QDir::toNativeSeparators(contestantOutput);
 		return;
 	}
 
 	if (! standardOutputReader.valid()) {
 		score = 0;
 		result = FileError;
-		message = tr(R"(Cannot open standard output file)");
+		message = tr(R"(Cannot open standard output file)") + "\n" + QDir::toNativeSeparators(outputFile);
 		return;
 	}
 
@@ -357,21 +365,21 @@ void CaseJudger::compareWithDiff(const QString &contestantOutput) {
 }
 
 void CaseJudger::compareRealNumbers(const QString &contestantOutput) {
-	FILE *contestantOutputFile = fopen(contestantOutput.toLocal8Bit().data(), "r");
+	FILE *contestantOutputFile = openComparisonFile(contestantOutput);
 
 	if (contestantOutputFile == nullptr) {
 		score = 0;
 		result = FileError;
-		message = tr(R"(Cannot open contestant's output file)");
+		message = tr(R"(Cannot open contestant's output file)") + "\n" + QDir::toNativeSeparators(contestantOutput);
 		return;
 	}
 
-	FILE *standardOutputFile = fopen(outputFile.toLocal8Bit().data(), "r");
+	FILE *standardOutputFile = openComparisonFile(outputFile);
 
 	if (standardOutputFile == nullptr) {
 		score = 0;
 		result = FileError;
-		message = tr(R"(Cannot open standard output file)");
+		message = tr(R"(Cannot open standard output file)") + "\n" + QDir::toNativeSeparators(outputFile);
 		fclose(contestantOutputFile);
 		return;
 	}

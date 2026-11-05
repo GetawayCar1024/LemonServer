@@ -136,6 +136,9 @@ async function api(method, path, body, opt = {}) {
       try {
         const j = await res.json();
         msg = j.busy ? '比赛正在评测或排队，不能修改' : (j.error || msg);
+        const badName = String(j.error || '').match(/(sourceFileName|inputFileName|outputFileName):/);
+        if (badName) msg = ({ sourceFileName: '源程序名', inputFileName: '输入文件名', outputFileName: '输出文件名' })[badName[1]] + '须使用英文字母、数字、点、下划线或连字符，不能含路径或系统保留名。题目显示名仍可用中文。';
+        if (j.error === 'Input and output file names must be different.') msg = '输入和输出文件名不能相同。';
       } catch (e) { /* ignore */ }
     }
     if (res.status === 401 && !opt.noLoginRedirect) {
@@ -342,6 +345,9 @@ window.addEventListener('hashchange', () => {
   for (const m of [...document.querySelectorAll('#modal-root > .modal-back')]) if (m._close) m._close();
   if (S.session) route();
 });
+window.addEventListener('beforeunload', (event) => {
+  if (LemonAutosave.pending) { event.preventDefault(); event.returnValue = ''; }
+});
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (S.menu) { closeMenu(); return; }
@@ -350,11 +356,15 @@ window.addEventListener('keydown', (e) => {
   if (top && top._close) top._close();
 });
 
-function go(hash) {
-  if (location.hash === hash) route(); else location.hash = hash;
+async function go(hash) {
+  try {
+    await LemonAutosave.flushAll();
+    if (location.hash === hash) route(); else location.hash = hash;
+  } catch (error) { fail(error); }
 }
 
 async function route() {
+  try { await LemonAutosave.flushAll(); } catch (error) { fail(error); return; }
   const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
   S.section = parts[0] === 'settings' || parts[0] === 'api' ? parts[0] : 'contests';
   try {
@@ -392,6 +402,7 @@ function shell(content, title) {
 }
 
 async function logout() {
+  try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
   try { await api('POST', '/api/auth/logout'); } catch (e) { /* ignore */ }
   S.session = '';
   localStorage.removeItem('lemonserver.session');
@@ -771,12 +782,11 @@ function renderTasksTab(page) {
     }
     showMenu(e.clientX, e.clientY, items);
   };
-  const pick = (i, j) => (e) => {
+  const pick = (i, j) => async (e) => {
     e.preventDefault();
     if (S.sel.task !== i || S.sel.testCase !== j) {
       S.sel.task = i; S.sel.testCase = j;
-      if (j < 0) S.sel.expanded.add(i);
-      rerenderTasks();
+      await rerenderTasks();
     }
     treeMenu(e);
   };
@@ -799,10 +809,10 @@ function renderTasksTab(page) {
   const tasks = S.contest.tasks;
   if (!tasks.length) treeList.appendChild(h('div', { class: 'empty' }, '暂无试题'));
   tasks.forEach((t, i) => {
-    const open = S.sel.expanded.has(i) || S.sel.task === i;
+    const open = S.sel.expanded.has(i);
     treeList.appendChild(h('div', {
       class: 'tree-item' + (S.sel.task === i && S.sel.testCase < 0 ? ' selected' : ''),
-      onclick: () => { S.sel.task = i; S.sel.testCase = -1; S.sel.expanded.add(i); rerenderTasks(); },
+      onclick: () => { S.sel.task = i; S.sel.testCase = -1; rerenderTasks(); },
       oncontextmenu: pick(i, -1),
     }, h('span', {
       class: 'twisty', onclick: (e) => { e.stopPropagation(); if (S.sel.expanded.has(i)) S.sel.expanded.delete(i); else S.sel.expanded.add(i); rerenderTasks(); },
@@ -826,13 +836,18 @@ function renderTasksTab(page) {
   }
 }
 
-function rerenderTasks() {
-  const page = $('.tabpage');
-  page.innerHTML = '';
-  renderTasksTab(page);
+async function rerenderTasks() {
+  try {
+    await LemonAutosave.flushAll();
+    const page = $('.tabpage');
+    if (!page) return;
+    page.innerHTML = '';
+    renderTasksTab(page);
+  } catch (error) { fail(error); }
 }
 
-async function saveTask(i, patch) {
+async function saveTask(i, patch, editorSave = false) {
+  if (!editorSave) await LemonAutosave.flushAll();
   const t = await api('PUT', cpath() + '/tasks/' + i, patch);
   S.contest.tasks[i] = t;
   S.contest.totalScore = S.contest.tasks.reduce((a, x) => a + x.totalScore, 0);
@@ -841,6 +856,7 @@ async function saveTask(i, patch) {
 
 async function addTask() {
   try {
+    await LemonAutosave.flushAll();
     const r = await api('POST', cpath() + '/tasks', {});
     await reloadContest();
     S.sel.task = r.index; S.sel.testCase = -1;
@@ -849,6 +865,7 @@ async function addTask() {
 }
 
 async function addTestCase() {
+  try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
   const i = S.sel.task;
   const t = S.contest.tasks[i];
   const tc = { fullScore: S.settings.defaultFullScore, timeLimit: S.settings.defaultTimeLimit, memoryLimit: S.settings.defaultMemoryLimit, inputFiles: [], outputFiles: [], dependenceSubtask: [] };
@@ -862,6 +879,7 @@ async function addTestCase() {
 
 async function moveTask(d) {
   try {
+    await LemonAutosave.flushAll();
     const r = await api('POST', cpath() + '/tasks/' + S.sel.task + '/move', { direction: d < 0 ? 'up' : 'down' });
     await reloadContest();
     S.sel.task = r.index;
@@ -872,6 +890,7 @@ async function moveTask(d) {
 const deleteSelected = () => (S.sel.testCase >= 0 ? deleteTestCase(S.sel.task, S.sel.testCase) : deleteTask(S.sel.task));
 
 async function deleteTestCase(i, j) {
+  try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
   const t = S.contest.tasks[i];
   if (!t || !await confirmDlg(`删除测试点 #${j + 1}？`, '删除')) return;
   try {
@@ -883,6 +902,7 @@ async function deleteTestCase(i, j) {
 }
 
 async function deleteTask(i) {
+  try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
   const t = S.contest.tasks[i];
   if (!t || !await confirmDlg(`删除试题“${t.problemTitle}”？数据文件会保留。`, '删除')) return;
   try {
@@ -895,6 +915,7 @@ async function deleteTask(i) {
 }
 
 async function autoAddTasks() {
+  try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
   let found;
   try { found = await api('GET', cpath() + '/scan-tasks'); } catch (e) { return fail(e); }
   if (!found.length) {
@@ -906,6 +927,7 @@ async function autoAddTasks() {
   }
   const rows = found.map((t) => ({
     t, use: h('input', { type: 'checkbox', checked: true }),
+    source: h('input', { type: 'text', value: t.sourceFileName, maxlength: 64, style: { width: '140px' } }),
     score: h('input', { type: 'number', value: t.fullScore, style: { width: '80px' } }),
     time: h('input', { type: 'number', value: t.timeLimit, style: { width: '90px' } }),
     mem: h('input', { type: 'number', value: t.memoryLimit, style: { width: '90px' } }),
@@ -913,11 +935,11 @@ async function autoAddTasks() {
   modal({
     title: '自动添加试题',
     body: h('table', { class: 'grid' },
-      h('tr', null, h('th', null, ''), h('th', null, '试题'), h('th', null, '测试点'), h('th', null, '总分'), h('th', null, '时限 ms'), h('th', null, '内存 MiB')),
-      rows.map((r) => h('tr', null, h('td', null, r.use), h('td', null, r.t.name), h('td', { class: 'center' }, r.t.testCases.length), h('td', null, r.score), h('td', null, r.time), h('td', null, r.mem)))),
+      h('tr', null, h('th', null, ''), h('th', null, '试题'), h('th', null, '源程序名'), h('th', null, '测试点'), h('th', null, '总分'), h('th', null, '时限 ms'), h('th', null, '内存 MiB')),
+      rows.map((r) => h('tr', null, h('td', null, r.use), h('td', null, r.t.name), h('td', null, r.source), h('td', { class: 'center' }, r.t.testCases.length), h('td', null, r.score), h('td', null, r.time), h('td', null, r.mem)))),
     buttons: [{ label: '取消' }, {
       label: '添加', primary: true, onClick: async () => {
-        const tasks = rows.filter((r) => r.use.checked).map((r) => ({ name: r.t.name, fullScore: +r.score.value, timeLimit: +r.time.value, memoryLimit: +r.mem.value }));
+        const tasks = rows.filter((r) => r.use.checked).map((r) => ({ name: r.t.name, sourceFileName: r.source.value, fullScore: +r.score.value, timeLimit: +r.time.value, memoryLimit: +r.mem.value }));
         if (!tasks.length) return;
         const res = await api('POST', cpath() + '/add-tasks', { tasks });
         toast(`已添加 ${res.added} 道试题`);
@@ -932,19 +954,15 @@ function renderTaskEditor(editor, i) {
   const t = JSON.parse(JSON.stringify(S.contest.tasks[i]));
   const status = h('span', { class: 'status-saved' });
   const disabled = S.contest.busy;
-  const pending = {};
-  const save = debounce(async (patch) => {
-    status.textContent = '保存中…';
-    try {
-      await saveTask(i, patch);
-      status.textContent = '已保存';
+  const save = LemonAutosave.create(async (patch) => {
+      await saveTask(i, patch, true);
       const label = document.querySelectorAll('.tree-item:not(.child) .label')[i];
       if (label) label.textContent = S.contest.tasks[i].problemTitle || '(未命名)';
-    } catch (e) { status.textContent = ''; fail(e); }
-  }, 500);
-  const set = (k, v) => { t[k] = v; pending[k] = v; save({ ...pending }); };
+  }, { onState: state => { status.textContent = { pending: '待保存', saving: '保存中…', saved: '已保存', failed: '保存失败（点击重试）' }[state]; }, onError: fail });
+  status.onclick = () => save.flush().catch(fail);
+  const set = (k, v) => { t[k] = v; save.schedule({ [k]: v }); };
   const saveNow = async (patch) => {
-    try { await saveTask(i, { ...pending, ...patch }); rerenderEditor(); } catch (e) { fail(e); }
+    try { await save.flush(); await saveTask(i, patch); rerenderEditor(); } catch (e) { fail(e); }
   };
   function rerenderEditor() { editor.innerHTML = ''; renderTaskEditor(editor, i); }
 
@@ -962,22 +980,13 @@ function renderTaskEditor(editor, i) {
   const isProgram = t.taskType !== 1;
   const isComm = t.taskType === 3 || t.taskType === 4;
   const titleInput = text('problemTitle', {
-    oninput: (e) => {
-      const old = t.problemTitle;
-      set('problemTitle', e.target.value);
-      // keep the source file name following the title while they matched (TaskEditWidget)
-      if (/^\w*$/.test(e.target.value) && t.sourceFileName === old) {
-        set('sourceFileName', e.target.value);
-        const src = $('#f-src');
-        if (src) src.value = e.target.value;
-      }
-    },
+    oninput: (e) => set('problemTitle', e.target.value),
   });
 
   const grid = h('div', { class: 'form-grid' },
-    field('名称', titleInput),
+    field('名称', titleInput, '仅作显示，可使用中文；改名不会重命名程序或数据'),
     field('类型', typeSeg),
-    isProgram && !isComm ? field('源程序名', text('sourceFileName', { id: 'f-src', placeholder: '不含扩展名' })) : null,
+    isProgram && !isComm ? field('源程序名', text('sourceFileName', { id: 'f-src', placeholder: '英文文件名，不含扩展名', maxlength: 64 }), '使用英文字母、数字、点、下划线或连字符') : null,
     isProgram ? field('', check('subFolderCheck', '源程序在选手的同名子文件夹中')) : null,
     isProgram ? field('输入文件', h('div', { class: 'row' }, h('div', { style: { flex: '0 1 260px' } }, text('inputFileName')), check('standardInputCheck', '标准输入'))) : null,
     isProgram ? field('输出文件', h('div', { class: 'row' }, h('div', { style: { flex: '0 1 260px' } }, text('outputFileName')), check('standardOutputCheck', '标准输出'))) : null,
@@ -1036,16 +1045,14 @@ function renderTestCaseEditor(editor, i, j) {
   const tc = JSON.parse(JSON.stringify(t.testCases[j]));
   const status = h('span', { class: 'status-saved' });
   const disabled = S.contest.busy;
-  const save = debounce(async () => {
-    status.textContent = '保存中…';
-    try {
-      const cases = S.contest.tasks[i].testCases.map((x, k) => (k === j ? tc : x));
-      await saveTask(i, { testCases: cases });
-      status.textContent = '已保存';
+  const queue = LemonAutosave.create(async (patch) => {
+      const cases = S.contest.tasks[i].testCases.map((x, k) => (k === j ? { ...x, ...patch } : x));
+      await saveTask(i, { testCases: cases }, true);
       const sel = $('.tree-item.child.selected .score');
       if (sel) sel.textContent = tc.fullScore + (tc.inputFiles.length > 1 ? ` · ${tc.inputFiles.length} 组` : '');
-    } catch (e) { status.textContent = ''; fail(e); }
-  }, 500);
+  }, { onState: state => { status.textContent = { pending: '待保存', saving: '保存中…', saved: '已保存', failed: '保存失败（点击重试）' }[state]; }, onError: fail });
+  status.onclick = () => queue.flush().catch(fail);
+  const save = () => queue.schedule(tc);
   const num = (k) => h('input', { type: 'number', value: tc[k], disabled, oninput: (e) => { tc[k] = +e.target.value; save(); } });
   const deps = h('input', {
     type: 'text', value: tc.dependenceSubtask.join(', '), disabled: disabled || j === 0, placeholder: j === 0 ? '—' : '如 1, 2',
@@ -1075,7 +1082,8 @@ function renderTestCaseEditor(editor, i, j) {
     h('button', { class: 'small plain', disabled, style: { marginTop: '6px' }, onclick: () => { tc.inputFiles.push(''); tc.outputFiles.push(''); draw(); } }, '＋ 添加一组')));
 }
 
-function addTestCasesWizard() {
+async function addTestCasesWizard() {
+  try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
   // AddTestCasesWizard
   const i = S.sel.task;
   const t = S.contest.tasks[i];
@@ -1166,7 +1174,8 @@ function addTestCasesWizard() {
 }
 
 // ---------------------------------------- test case manager (ExtTestCaseModifier) ----------
-function openTestCaseManager(taskIndex) {
+async function openTestCaseManager(taskIndex) {
+  try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
   const task = S.contest.tasks[taskIndex];
   const clone = (x) => JSON.parse(JSON.stringify(x));
   let cases = clone(task.testCases);
@@ -2505,6 +2514,7 @@ const JOB_MODE = { all: '全部', unjudged: '未评测', selected: '选中', gre
 
 async function startJudge(mode, items, extra = {}) {
   try {
+    await LemonAutosave.flushAll();
     const st = await api('POST', cpath() + '/judge', { mode, items, ...extra });
     const job = st.job || {};
     if (job.position === 0) {

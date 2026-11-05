@@ -3,7 +3,7 @@
 [![LemonServer](https://github.com/GetawayCar1024/LemonServer/actions/workflows/lemonserver.yml/badge.svg)](https://github.com/GetawayCar1024/LemonServer/actions/workflows/lemonserver.yml)
 [![Release](https://img.shields.io/github/v/release/GetawayCar1024/LemonServer)](https://github.com/GetawayCar1024/LemonServer/releases/latest)
 
-LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project_LemonLime) 的一个 fork：评测核心（`src/base`、`src/core`、导出 `result.html`、统计）和 `.cdf` 比赛格式都**原样沿用 LemonLime**，只是把 Qt Widgets 桌面界面换成了内置 HTTP 服务器、网页前端和 REST API。在任意一台能访问服务器的电脑上，用浏览器就能完成 LemonLime 的全部操作。
+LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project_LemonLime) 的一个 fork：沿用其评测核心（`src/base`、`src/core`、导出 `result.html`、统计）和 `.cdf` 比赛格式，并修复服务器场景下的计时、路径等问题，将 Qt Widgets 桌面界面换成内置 HTTP 服务器、网页前端和 REST API。
 
 - 基于 LemonLime 0.3.7（上游提交 `69aa223`），上游说明见 [README.LemonLime.md](README.LemonLime.md)。
 - 与 LemonLime 一样以 GPL-3.0-or-later 授权，见 [LICENSE](LICENSE)。
@@ -82,12 +82,14 @@ LemonServer [--host 0.0.0.0] [--port 8080] [--config <server.json>] [--web-root 
 2. 首次使用需要设置**默认比赛位置**（服务器上的绝对路径），可同时修改令牌。
 3. 新建比赛时只填比赛名，会自动创建 `<默认比赛位置>/<比赛名>/<比赛名>.cdf`、`data/`、`source/`。已有的 LemonLime 比赛文件夹可以直接复制到默认比赛位置下，或在网页中导入；LemonServer 生成的比赛同样可以用 LemonLime 桌面版打开。
 
+题目显示名可以用中文。源程序名（不含扩展名）和启用的文件输入输出名使用英文字母、数字、点、下划线或连字符，不可使用路径或系统保留名；改显示名不会重命名程序或数据。中文数据文件夹自动添加为题目时，会单独提供英文源程序名。配置自动保存，开始评测前会等待保存完成；保存失败时请根据提示修正或点击状态重试。
+
 - `--config`：服务器配置文件（令牌哈希、API Key、默认比赛位置），默认在 `%LOCALAPPDATA%\LemonServer\server.json`（Linux：`~/.config/LemonServer/server.json`）。
 - 评测设置与编译器默认保存在配置文件旁的 `settings.ini` 中，首次启动会自动检测 PATH 中的 gcc / g++ / fpc / jdk / python。加 `--use-desktop-settings` 则与本机的 LemonLime 桌面版共用设置。
 - `--reset-token`：忘记令牌时把它重置为 `123456`。
 - `--web-root`：从磁盘目录提供网页（开发前端时使用，默认使用编译进程序的 `web/`）。
 
-> 注意：服务器同一时间只打开一个比赛（与 LemonLime 一样，评测核心以比赛文件夹为工作目录）；评测进行中不能切换比赛或修改试题。请务必修改默认令牌，并且只在可信网络中开放端口。
+> 注意：服务器同一时间评测一场比赛，可以查看或编辑其他比赛，正在评测或排队的比赛不能修改。请务必修改默认令牌，并且只在可信网络中开放端口。
 
 ## API
 
@@ -125,6 +127,8 @@ curl -X PUT -H "Authorization: Bearer $KEY" -d '{"comparisonMode":5,"specialJudg
 ```bash
 python tests/server/smoke_test.py http://127.0.0.1:8080 /path/to/empty/contest-root
 ```
+
+路径回归自行启动隔离的临时服务器：`python tests/server/task_paths_test.py /path/to/LemonServer`。前端保存队列使用 `node --test tests/server/autosave_test.mjs`；题目折叠及立即评测的浏览器回归为 `node tests/server/ui_test.mjs /path/to/LemonServer --embedded`（需要 Node.js 24 和 Chromium，可用 `CHROME_BIN` 指定浏览器）。
 
 ## 代码结构与对上游的改动
 

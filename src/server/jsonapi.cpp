@@ -16,6 +16,7 @@
 #include "core/testcase.h"
 
 #include <QDir>
+#include <QRegularExpression>
 
 namespace LemonServerJson {
 
@@ -24,6 +25,44 @@ namespace LemonServerJson {
 	QString fromApiPath(QString path) {
 		path.replace('\\', '/');
 		return path.replace('/', QDir::separator());
+	}
+
+	bool isPortableTaskFileName(const QString &name) {
+		static const QRegularExpression safe("\\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\\z");
+		static const QRegularExpression reserved("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\\.|$)",
+		                                         QRegularExpression::CaseInsensitiveOption);
+		return safe.match(name).hasMatch() && ! name.endsWith('.') && ! reserved.match(name).hasMatch();
+	}
+
+	QString defaultTaskFileName(const QString &title, int ordinal) {
+		return isPortableTaskFileName(title) && title.size() <= 64 ? title : QString("task-%1").arg(ordinal);
+	}
+
+	static bool validateNames(const QString &source, const QString &input, const QString &output,
+	                          Task::TaskType type, bool standardInput, bool standardOutput, QString *error) {
+		const auto reject = [&](const QString &field) {
+			*error = field + ": use an ASCII file name (letters, digits, dots, underscores and hyphens; "
+			                 "no paths or reserved names). The display title may contain Chinese.";
+			return false;
+		};
+		if ((! source.isEmpty() || type == Task::Traditional || type == Task::AnswersOnly) &&
+		    (! isPortableTaskFileName(source) || source.size() > 64))
+			return reject("sourceFileName");
+		if (type != Task::AnswersOnly && ! standardInput && ! isPortableTaskFileName(input))
+			return reject("inputFileName");
+		if (type != Task::AnswersOnly && ! standardOutput && ! isPortableTaskFileName(output))
+			return reject("outputFileName");
+		if (type != Task::AnswersOnly && ! standardInput && ! standardOutput &&
+		    input.compare(output, Qt::CaseInsensitive) == 0) {
+			*error = "Input and output file names must be different.";
+			return false;
+		}
+		return true;
+	}
+
+	bool validateTaskFileNames(const Task *task, QString *error) {
+		return validateNames(task->getSourceFileName(), task->getInputFileName(), task->getOutputFileName(),
+		                     task->getTaskType(), task->getStandardInputCheck(), task->getStandardOutputCheck(), error);
 	}
 
 	static QJsonArray pathArray(const QStringList &list) {
@@ -101,6 +140,12 @@ namespace LemonServerJson {
 				return false;
 			}
 		}
+		const auto text = [&](const char *key, const QString &current) { return obj.contains(key) ? obj[key].toString() : current; };
+		if (! validateNames(text("sourceFileName", task->getSourceFileName()), text("inputFileName", task->getInputFileName()),
+		                   text("outputFileName", task->getOutputFileName()), Task::TaskType(obj["taskType"].toInt(task->getTaskType())),
+		                   obj["standardInputCheck"].toBool(task->getStandardInputCheck()),
+		                   obj["standardOutputCheck"].toBool(task->getStandardOutputCheck()), error))
+			return false;
 		if (obj.contains("testCases")) {
 			const auto arr = obj["testCases"].toArray();
 			for (int i = 0; i < arr.size(); i++) {

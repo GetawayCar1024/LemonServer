@@ -81,6 +81,25 @@ jobs:
           Stop-Process $p.Id
           if ($s.version -ne "${{ steps.version.outputs.version }}") { exit 1 }
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Path and editor regressions
+        shell: pwsh
+        env:
+          PKG: ${{ steps.version.outputs.name }}
+          PYTHONUTF8: "1"
+        run: |
+          if (Test-Path 'C:\mingw64\bin\g++.exe') { $env:PATH = "C:\mingw64\bin;$env:PATH" }
+          if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) { throw 'MinGW g++ is required for judging regressions' }
+          node --test tests/server/autosave_test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/server/task_paths_test.py "$env:PKG\LemonServer.exe" --embedded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -99,7 +118,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           sudo apt-get update
-          sudo apt-get install -y g++-13 ninja-build patchelf libgl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libegl1 libopengl0
+          sudo apt-get install -y g++-13 ninja-build patchelf libgl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libegl1 libopengl0 bubblewrap
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -130,6 +149,16 @@ jobs:
 
       - name: Watcher test
         run: bash tests/watcher/run.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Path and editor regressions
+        run: |
+          node --test tests/server/autosave_test.mjs
+          python3 tests/server/task_paths_test.py "$PWD/build/LemonServer" --embedded
+          node tests/server/ui_test.mjs "$PWD/build/LemonServer" --embedded
 
       - name: Build .deb
         env:

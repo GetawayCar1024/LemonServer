@@ -1190,17 +1190,17 @@ void LemonServer::setupContestRoutes() {
 		             if (! body.contains("problemTitle"))
 			             body["problemTitle"] = tr("Problem %1").arg(c->getTaskList().size() + 1);
 		             if (! body.contains("sourceFileName")) {
-			             static const QRegularExpression word("^\\w+$");
-			             const QString title = body["problemTitle"].toString();
-			             if (word.match(title).hasMatch()) {
-				             body["sourceFileName"] = title;
-				             if (! body.contains("inputFileName"))
-					             body["inputFileName"] = title + "." + settings->getDefaultInputFileExtension();
-				             if (! body.contains("outputFileName"))
-					             body["outputFileName"] =
-					                 title + "." + settings->getDefaultOutputFileExtension();
-			             }
+			             int ordinal = c->getTaskList().size() + 1;
+			             QString source = defaultTaskFileName(body["problemTitle"].toString(), ordinal);
+			             const auto used = [&](const QString &name) {
+				             for (const auto *task : c->getTaskList()) if (task->getSourceFileName().compare(name, Qt::CaseInsensitive) == 0) return true;
+				             return false;
+			             };
+			             while (used(source)) source = QString("task-%1").arg(++ordinal);
+			             body["sourceFileName"] = source;
 		             }
+		             if (! body.contains("inputFileName")) body["inputFileName"] = body["sourceFileName"].toString() + "." + settings->getDefaultInputFileExtension();
+		             if (! body.contains("outputFileName")) body["outputFileName"] = body["sourceFileName"].toString() + "." + settings->getDefaultOutputFileExtension();
 		             QString error;
 		             if (! applyTaskJson(newTask, body, settings, &error)) {
 			             delete newTask;
@@ -1208,7 +1208,10 @@ void LemonServer::setupContestRoutes() {
 		             }
 		             c->addTask(newTask);
 		             newTask->refreshCompilerConfiguration(settings);
-		             manager->save();
+		             if (! manager->save(&error)) {
+			             c->deleteTask(c->getTaskList().size() - 1);
+			             return errorResponse(Status::InternalServerError, error);
+		             }
 		             return jsonResponse(QJsonObject{{"index", int(c->getTaskList().size() - 1)},
 		                                             {"task", taskToJson(newTask)}},
 		                                 Status::Created);
@@ -1246,7 +1249,8 @@ void LemonServer::setupContestRoutes() {
 		             QString error;
 		             if (! applyTaskJson(t, body, settings, &error))
 			             return errorResponse(Status::BadRequest, error);
-		             manager->save();
+		             if (! manager->save(&error))
+			             return errorResponse(Status::InternalServerError, error);
 		             return jsonResponse(taskToJson(t));
 	             });
 
@@ -1312,10 +1316,15 @@ void LemonServer::setupContestRoutes() {
 			             for (const auto &t : manager->scanNewTasks())
 				             tasks.append(QJsonObject{{"name", t.toObject()["name"]}});
 		             }
-		             const int added = manager->addTasks(tasks);
+		             QString error;
+		             const int added = manager->addTasks(tasks, &error);
+		             if (! error.isEmpty()) return errorResponse(Status::BadRequest, error);
 		             if (added == 0)
 			             return errorResponse(Status::BadRequest, tr("No task found"));
-		             manager->save();
+		             if (! manager->save(&error)) {
+			             for (int i = 0; i < added; ++i) c->deleteTask(c->getTaskList().size() - 1);
+			             return errorResponse(Status::InternalServerError, error);
+		             }
 		             return okResponse({{"added", added}});
 	             });
 

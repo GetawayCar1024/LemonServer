@@ -2,6 +2,7 @@
     <qresource prefix="/web">
         <file>index.html</file>
         <file>app.js</file>
+        <file>autosave.js</file>
         <file>app.css</file>
         <file>favicon.png</file>
         <file>logo.png</file>
