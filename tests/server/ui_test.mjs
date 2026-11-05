@@ -20,7 +20,10 @@ const port = async () => {
 const serverPort = await port(), debugPort = await port(), origin = `http://127.0.0.1:${serverPort}`;
 const env = { ...process.env, ...(process.platform === 'win32' && existsSync('E:/MinGW64/bin/g++.exe') ? { PATH: 'E:/MinGW64/bin;' + process.env.PATH } : {}) };
 const server = spawn(executable, ['--host', '127.0.0.1', '--port', String(serverPort), '--config', path.join(home, 'server.json'), ...(process.argv.includes('--embedded') ? [] : ['--web-root', path.join(repo, 'web')])], { cwd: home, env, windowsHide: true, stdio: 'ignore' });
-const browser = spawn(browserPath, ['--headless', '--disable-gpu', '--no-first-run', `--remote-debugging-port=${debugPort}`, `--user-data-dir=${path.join(home, 'browser')}`, 'about:blank'], { stdio: 'ignore' });
+const browser = spawn(browserPath, ['--headless', '--disable-gpu', '--no-first-run', `--remote-debugging-port=${debugPort}`, `--user-data-dir=${path.join(home, 'browser')}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+let browserError = '';
+browser.stderr.on('data', data => { browserError = (browserError + data).slice(-8192); });
+browser.on('error', error => { browserError += error.message; });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let token, socket, send;
 const api = async (method, endpoint, body, raw) => {
@@ -42,7 +45,12 @@ try {
   await api('PUT', contest + '/files/upload?' + new URLSearchParams({ root: 'source', path: 'alice/sum.cpp' }), undefined, '#include <cstdio>\nint main(){long long a,b;scanf("%lld%lld",&a,&b);printf("%lld\\n",a+b);}\n');
   await api('POST', contest + '/refresh');
   let targets;
-  for (let i = 0; i < 100 && !targets; i++) { targets = await fetch(`http://127.0.0.1:${debugPort}/json`).then(r => r.json()).catch(() => null); if (!targets) await delay(50); }
+  for (let i = 0; i < 300 && !targets?.some(t => t.type === 'page'); i++) {
+    if (browser.exitCode !== null || browser.signalCode !== null) break;
+    targets = await fetch(`http://127.0.0.1:${debugPort}/json`, { signal: AbortSignal.timeout(1000) }).then(r => r.json()).catch(() => null);
+    if (!targets?.some(t => t.type === 'page')) await delay(100);
+  }
+  assert.ok(targets?.some(t => t.type === 'page'), `Chromium did not start (${browserPath}; exit ${browser.exitCode}; signal ${browser.signalCode}):\n${browserError}`);
   socket = new WebSocket(targets.find(t => t.type === 'page').webSocketDebuggerUrl);
   await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }));
   let id = 0; const requests = new Map();
