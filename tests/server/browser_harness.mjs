@@ -22,7 +22,7 @@ export async function withBrowser(action) {
   const serverPort = await port(), debugPort = await port(), origin = `http://127.0.0.1:${serverPort}`;
   const env = { ...process.env, ...(process.platform === 'win32' && existsSync('E:/MinGW64/bin/g++.exe') ? { PATH: 'E:/MinGW64/bin;' + process.env.PATH } : {}) };
   const server = spawn(executable, ['--host', '127.0.0.1', '--port', String(serverPort), '--config', path.join(home, 'server.json'), ...(process.argv.includes('--embedded') ? [] : ['--web-root', path.join(repo, 'web')])], { cwd: home, env, windowsHide: true, stdio: 'ignore' });
-  const browser = spawn(chrome, ['--headless', '--disable-gpu', '--no-first-run', `--remote-debugging-port=${debugPort}`, `--user-data-dir=${path.join(home, 'browser')}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const browser = spawn(chrome, ['--headless', '--disable-gpu', '--no-first-run', '--window-size=1440,1000', `--remote-debugging-port=${debugPort}`, `--user-data-dir=${path.join(home, 'browser')}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   let browserError = '', token, socket, send;
   browser.stderr.on('data', data => { browserError = (browserError + data).slice(-8192); });
   browser.on('error', error => { browserError += error.message; });

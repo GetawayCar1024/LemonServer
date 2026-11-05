@@ -20,9 +20,13 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   await click(row(1) + ' td.c', { button: 'right' });
   if (!await js(`[...document.querySelectorAll('.menu .mi')].some(item=>item.textContent.includes('修改'))`)) failures.push('Right-clicking a test case must offer editing actions');
   await click('.tcm-table thead th');
+  await js(`(()=>{window.pointerTrace=[]; for(const type of ['mousedown','mousemove','mouseup']) document.addEventListener(type,event=>{window.pointerTrace.push({type:event.type,buttons:event.buttons,x:event.clientX,y:event.clientY,row:event.target.closest('tr')?.dataset.case,target:event.target.tagName});},{capture:true});})()`);
   await drag(row(1) + ' td.c input', row(3) + ' td.c input');
   await delay(30);
-  if (await js(`document.querySelectorAll('.tcm-table tr.case.selected').length`) !== 3) failures.push('Pointer drag must select a contiguous range of test cases');
+  if (await js(`document.querySelectorAll('.tcm-table tr.case.selected').length`) !== 3) {
+    const details = await js(`({viewport:[innerWidth,innerHeight],window:[outerWidth,outerHeight],selection:[...document.querySelectorAll('.tcm-table tr.case.selected')].map(row=>row.dataset.case),pointer:window.pointerTrace})`);
+    failures.push('Pointer drag must select a contiguous range of test cases: ' + JSON.stringify(details));
+  }
   if (await js('window.getSelection().toString()') !== '') failures.push('Range selection must not select page text');
   assert.deepEqual(failures, []);
   console.log('PASS test manager right-click, unified selection and pointer range selection');
