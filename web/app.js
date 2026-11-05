@@ -257,10 +257,10 @@ function showMenu(x, y, items) {
   menu.style.left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
   menu.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
   S.menu = menu;
-  setTimeout(() => {
-    document.addEventListener('mousedown', menuOutside, true);
-    window.addEventListener('blur', closeMenu);
-  }, 0);
+  // Menus open from click/contextmenu, after the opening mousedown's capture phase.
+  // Bind now so a fast click/drag outside cannot pass through a still-open menu.
+  document.addEventListener('mousedown', menuOutside, true);
+  window.addEventListener('blur', closeMenu);
 }
 function menuOutside(e) { if (S.menu && !S.menu.contains(e.target)) closeMenu(); }
 function closeMenu() {
