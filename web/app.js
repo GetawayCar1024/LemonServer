@@ -49,6 +49,7 @@ const S = {
   dataFiles: [],
   sel: { task: -1, testCase: -1, expanded: new Set() },
   resultSel: new Set(),
+  resultSort: { key: 'total', direction: -1 },
   fs: { path: '', expanded: new Set(['']), cache: new Map(), selected: new Set() },
   judge: { timer: null, since: 0, log: [], status: null, dialog: null, contest: '' },
 };
@@ -128,7 +129,9 @@ async function api(method, path, body, opt = {}) {
     payload = JSON.stringify(body);
     headers['Content-Type'] = 'application/json';
   }
-  const res = await fetch(path, { method, headers, body: payload });
+  const res = opt.onUploadProgress && opt.raw instanceof Blob
+    ? await LemonUpload.request(path, { method, headers, body: payload, onProgress: opt.onUploadProgress })
+    : await fetch(path, { method, headers, body: payload });
   const ctype = res.headers.get('Content-Type') || '';
   if (!res.ok) {
     let msg = res.status + ' ' + res.statusText;
@@ -606,9 +609,11 @@ async function finishImport(r) {
 async function importContestZip(file) {
   const opt = await importOptions(file.name.replace(/\.zip$/i, ''));
   if (!opt) return;
-  const dlg = modal({ title: '正在上传并导入…', body: h('div', { class: 'progress', style: { width: '360px' } }, h('div', { style: { width: '100%' } })), closable: false });
+  const bar = h('div', { style: { width: '0%' } }), label = h('div', { class: 'progress-label' }, '准备上传…');
+  const dlg = modal({ title: '上传比赛', body: h('div', { style: { width: '400px' } }, h('div', { class: 'progress' }, bar), label), closable: false });
   try {
-    const r = await api('POST', '/api/import-contest' + qs({ name: opt.name, overwrite: opt.overwrite ? 1 : 0 }), undefined, { raw: file });
+    const r = await api('POST', '/api/import-contest' + qs({ name: opt.name, overwrite: opt.overwrite ? 1 : 0 }), undefined, { raw: file,
+      onUploadProgress: (sent, total) => { bar.style.width = (total ? sent / total * 100 : 0) + '%'; label.textContent = sent === total ? '正在导入…' : `${formatSize(sent)} / ${formatSize(total)}`; } });
     dlg.close(true);
     finishImport(r);
   } catch (e) { dlg.close(true); fail(e); }
@@ -627,12 +632,16 @@ async function importContestFolder(items) {
   const bar = h('div', { style: { width: '0%' } });
   const dlg = modal({ title: '正在上传比赛…', body: h('div', { style: { width: '420px' } }, h('div', { class: 'progress' }, bar), label), closable: false });
   try {
-    let n = 0;
+    let n = 0, sent = 0;
+    const total = items.reduce((sum, item) => sum + item.file.size, 0);
     for (const it of items) {
       const rel = single ? it.rel.slice(top.length + 1) : it.rel;
-      label.textContent = `${++n} / ${items.length} · ${rel}`;
-      bar.style.width = (n / items.length * 100) + '%';
-      await api('PUT', '/api/import-contest/file' + qs({ id, path: rel }), undefined, { raw: it.file });
+      label.textContent = `${n + 1} / ${items.length} · ${rel}`;
+      await api('PUT', '/api/import-contest/file' + qs({ id, path: rel }), undefined, { raw: it.file, onUploadProgress: loaded => {
+        bar.style.width = (total ? (sent + loaded) / total * 100 : n / items.length * 100) + '%';
+        label.textContent = `${n + 1} / ${items.length} · ${rel} · ${formatSize(sent + loaded)} / ${formatSize(total)}`;
+      } });
+      sent += it.file.size; n++;
     }
     label.textContent = '正在导入…';
     const r = await api('POST', '/api/import-contest/finish' + qs({ id, name: opt.name, overwrite: opt.overwrite ? 1 : 0 }));
@@ -670,6 +679,8 @@ async function renderContest(name, tab) {
   if (prev !== name) {
     S.sel = { task: S.contest.tasks.length ? 0 : -1, testCase: -1, expanded: new Set() };
     S.resultSel = new Set();
+    S.resultAnchor = null;
+    S.resultSort = { key: 'total', direction: -1 };
     S.fs = { path: '', expanded: new Set(['']), cache: new Map(), selected: new Set() };
   }
   await loadDataFiles();
@@ -780,6 +791,7 @@ function renderTasksTab(page) {
       if (S.sel.testCase >= 0) items.push({ label: '删除测试点', kbd: 'Delete', danger: true, disabled: judging, onClick: () => deleteTestCase(S.sel.task, S.sel.testCase) });
       else items.push('sep', { label: '测试点管理器', disabled: judging, onClick: () => openTestCaseManager(S.sel.task) },
         { label: '导入 Hydro 配置…', disabled: judging, onClick: () => importHydroConfig(S.sel.task) });
+      items.push('sep', { label: '评测此题…', disabled: !S.contest.contestants.length, onClick: () => chooseJudgeTasks([S.sel.task]) });
     }
     showMenu(e.clientX, e.clientY, items);
   };
@@ -918,6 +930,7 @@ async function moveTaskTo(from, to) {
     await api('POST', cpath() + '/tasks/' + from + '/move', { to });
     await reloadContest();
     S.sel.task = selected; S.sel.expanded = expanded;
+    remapResultTasks(remap);
     rerenderTasks();
   } catch (e) { fail(e); }
 }
@@ -943,6 +956,7 @@ async function deleteTask(i) {
   try {
     await api('DELETE', cpath() + '/tasks/' + i);
     await reloadContest();
+    remapResultTasks(index => index === i ? -1 : index > i ? index - 1 : index);
     S.sel.task = Math.min(i, S.contest.tasks.length - 1);
     S.sel.testCase = -1;
     rerenderTasks();
@@ -1810,6 +1824,21 @@ async function openTestCaseManager(taskIndex) {
 }
 
 // ---------------------------------------- results tab (ResultViewer) ------------------------
+function remapResultTasks(remap) {
+  const key = value => {
+    if (!value || value.endsWith('|*')) return value;
+    const divider = value.lastIndexOf('|'), index = remap(Number(value.slice(divider + 1)));
+    return index < 0 ? null : value.slice(0, divider + 1) + index;
+  };
+  S.resultSel = new Set([...S.resultSel].map(key).filter(Boolean));
+  S.resultAnchor = key(S.resultAnchor);
+  S.resultDrag = null;
+  if (S.resultSort.key.startsWith('task:')) {
+    const index = remap(Number(S.resultSort.key.slice(5)));
+    S.resultSort = index < 0 ? { key: 'total', direction: -1 } : { ...S.resultSort, key: 'task:' + index };
+  }
+}
+
 function computeRanks(contestants) {
   const sorted = contestants.filter((c) => c.totalScore !== -1).map((c) => [-c.totalScore, c.name]).sort((a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : 1));
   const rank = {};
@@ -1817,7 +1846,7 @@ function computeRanks(contestants) {
   return rank;
 }
 
-// Selection in the results table, like in a spreadsheet: a click selects one cell, Ctrl/⌘-click adds or
+// A click selects one cell or deselects it if already selected; Ctrl/⌘-click adds or
 // removes one, Shift-click selects the rectangle from the last clicked cell, dragging selects a rectangle
 // (Ctrl/⌘ + drag adds it). The name column stands for the whole row. A right click on a cell outside the
 // selection selects it, then opens onMenu(event). Returns bind(td, row, col), with bind.selectAll().
@@ -1840,13 +1869,14 @@ function resultGridSelection(list, onChange, onMenu) {
   const select = (base, keys) => {
     S.resultSel = new Set(base);
     for (const k of keys) S.resultSel.add(k);
-    for (const [k, td] of cells) td.classList.toggle('selected', S.resultSel.has(k));
+    for (const [k, td] of cells) { td.classList.toggle('selected', S.resultSel.has(k)); td.setAttribute('aria-selected', String(S.resultSel.has(k))); }
     onChange();
   };
   const bind = (td, r, col) => {
     const key = keyOf(r, col);
     cells.set(key, td);
     td.classList.toggle('selected', S.resultSel.has(key));
+    td.setAttribute('aria-selected', String(S.resultSel.has(key)));
     td.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       if (!S.resultSel.has(key)) {
@@ -1868,9 +1898,10 @@ function resultGridSelection(list, onChange, onMenu) {
         return;
       }
       S.resultAnchor = key;
-      if (add && before.has(key)) {
-        before.delete(key);
-        select(before, []);
+      if (S.resultSel.has(key)) {
+        const remaining = new Set(S.resultSel);
+        remaining.delete(key);
+        select(remaining, []);
       } else select(before, [key]);
       S.resultDrag = { start: { r, col }, base: add ? new Set(S.resultSel) : before, rect, select };
     });
@@ -1895,6 +1926,12 @@ document.addEventListener('keydown', (e) => {
 
 function renderResultsTab(page) {
   const c = S.contest;
+  if (S.resultSort.key.startsWith('task:') && +S.resultSort.key.slice(5) >= c.tasks.length) S.resultSort = { key: 'total', direction: -1 };
+  const names = new Set(c.contestants.map(contestant => contestant.name));
+  for (const key of S.resultSel) {
+    const divider = key.lastIndexOf('|'), column = key.slice(divider + 1);
+    if (!names.has(key.slice(0, divider)) || column !== '*' && (!/^\d+$/.test(column) || +column >= c.tasks.length)) S.resultSel.delete(key);
+  }
   const judging = c.busy; // being judged or queued: no editing (judging can still be queued)
   const exportMenu = h('select', {
     onchange: async (e) => {
@@ -1914,7 +1951,7 @@ function renderResultsTab(page) {
   const selectedList = () => {
     const map = new Map();
     for (const k of S.resultSel) {
-      const [name, t] = k.split('|');
+      const divider = k.lastIndexOf('|'), name = k.slice(0, divider), t = k.slice(divider + 1);
       if (!map.has(name)) map.set(name, new Set());
       if (t === '*') c.tasks.forEach((_, i) => map.get(name).add(i)); else map.get(name).add(+t);
     }
@@ -1929,6 +1966,7 @@ function renderResultsTab(page) {
     h('div', { class: 'sep' }),
     selBtn,
     h('button', { disabled: !c.contestants.length, onclick: () => startJudge('all') }, '全部'),
+    h('button', { disabled: !c.contestants.length || !c.tasks.length, 'data-judge-tasks': true, onclick: () => chooseJudgeTasks() }, '评测题目…'),
     h('button', { onclick: () => startJudge('unjudged') }, '未评测'),
     h('button', { disabled: !c.contestants.length, onclick: (e) => rejudgeByStateMenu(e.currentTarget) }, '按状态重测 ▾'),
     h('div', { class: 'sep' }),
@@ -1942,7 +1980,12 @@ function renderResultsTab(page) {
   }
 
   const rank = computeRanks(c.contestants);
-  const list = c.contestants.slice().sort((a, b) => ((rank[a.name] ?? 1e9) - (rank[b.name] ?? 1e9)) || (a.name < b.name ? -1 : 1));
+  const list = LemonResultOrder.sort(c.contestants, S.resultSort.key, S.resultSort.direction);
+  const sortHeader = (label, key) => h('th', { 'aria-sort': S.resultSort.key === key ? S.resultSort.direction > 0 ? 'ascending' : 'descending' : 'none' },
+    h('button', { class: 'result-sort', 'data-result-sort': key, onclick: () => {
+      S.resultSort = { key, direction: S.resultSort.key === key ? -S.resultSort.direction : key === 'name' ? 1 : -1 };
+      page.replaceChildren(); renderResultsTab(page);
+    } }, label, S.resultSort.key === key ? (S.resultSort.direction > 0 ? ' ↑' : ' ↓') : ''));
   const nf = hslOf(theme().nf), ce = hslOf(theme().ce);
   // ResultViewer::contextMenuEvent(): details (one contestant), judge, delete
   const resultMenu = (e) => {
@@ -1962,14 +2005,14 @@ function renderResultsTab(page) {
     delBtn.disabled = judging || !S.resultSel.size;
   }, resultMenu);
   const table = h('table', { class: 'grid results' },
-    h('tr', null, h('th', null, '排名'), h('th', null, '选手'), h('th', null, '总分'),
-      c.tasks.map((t) => h('th', null, t.problemTitle, h('span', { class: 'muted', style: { fontWeight: 400, marginLeft: '4px' } }, t.totalScore))),
+    h('tr', null, h('th', null, '排名'), sortHeader('选手', 'name'), sortHeader('总分', 'total'),
+      c.tasks.map((t, i) => sortHeader([t.problemTitle, h('span', { class: 'muted', style: { fontWeight: 400, marginLeft: '4px' } }, t.totalScore)], 'task:' + i)),
       h('th', null, '用时 (s)'), h('th', null, '评测时间')),
     list.map((ct, row) => {
       const nameCell = h('td', { class: 'name', title: '双击查看详情' }, ct.name);
       bind(nameCell, row, -1);
       nameCell.addEventListener('dblclick', () => showDetail(ct.name));
-      return h('tr', null,
+      return h('tr', { 'data-contestant': ct.name },
         h('td', null, rank[ct.name] !== undefined ? rank[ct.name] + 1 : '—'),
         nameCell,
         h('td', { class: 'total', style: { background: ct.totalScore >= 0 ? colorGrand(ct.totalScore, c.totalScore) : '' } }, ct.totalScore >= 0 ? ct.totalScore : '—'),
@@ -1981,7 +2024,7 @@ function renderResultsTab(page) {
           }
           const failed = r.score !== -1 && c.tasks[j].taskType !== 1 && r.compileState !== 0;
           const td = h('td', {
-            class: 'cell', style: { background: bg },
+            class: 'cell', style: { background: bg }, 'data-result-key': ct.name + '|' + j,
             title: r.score === -1 ? (r.submitted ? '已提交，未评测' : '未提交') : (failed ? COMPILE_STATE[r.compileState] : (r.sourceFile || '')),
           }, r.score === -1 ? h('span', { class: 'unjudged' + (r.submitted ? ' submitted' : '') }, r.submitted ? '未评测' : '未提交') : r.score,
           failed ? h('span', { class: 'small-text', style: { opacity: 0.75, marginLeft: '5px' } }, COMPILE_ABBR[r.compileState]) : null);
@@ -1996,7 +2039,7 @@ function renderResultsTab(page) {
     h('div', { class: 'legend' },
       h('span', null, h('i', { style: { background: nf } }), 'NS 未找到源程序'),
       h('span', null, h('i', { style: { background: ce } }), 'CE 等编译失败'),
-      h('span', { class: 'right' }, '拖动或 Shift 框选 · Ctrl 多选 · 双击看详情 · 右键菜单'))));
+      h('span', { class: 'right' }, '单击选中／取消 · 拖动或 Shift 框选 · Ctrl 多选 · 双击看详情'))));
   S.pageKeys = {
     root: table,
     keydown: (e) => {
@@ -2181,7 +2224,7 @@ function pickFolder(title, initial, excluded) {
 const FS_SHORTCUTS = [
   ['双击 / Enter', '打开文件夹或编辑文件'], ['Backspace / Alt+↑', '返回上一级'], ['↑ ↓（+Shift）', '移动选择（扩展选择）'],
   ['Ctrl/Shift + 单击', '多选 / 连续选择'], ['Ctrl+A', '全选'], ['Esc', '取消选择'],
-  ['Ctrl+C / Ctrl+X / Ctrl+V', '复制 / 剪切 / 粘贴'], ['拖动到文件夹', '移动（按住 Ctrl 复制）'], ['M', '移动到…'],
+  ['Ctrl+C / Ctrl+X / Ctrl+V', '复制 / 剪切 / 粘贴（支持剪贴板文件上传）'], ['拖动到文件夹', '移动（按住 Ctrl 复制）'], ['M', '移动到…'],
   ['F2', '重命名'], ['Delete', '删除'], ['Ctrl+B', '用 Testlib for Lemons 编译选中的源文件'], ['Alt+N / Alt+Shift+N', '新建文件 / 文件夹'], ['Alt+U', '上传文件'],
   ['Ctrl+F 或 /', '筛选当前文件夹'], ['右键', '更多操作'],
 ];
@@ -2288,23 +2331,29 @@ async function renderFilesTab(page) {
   });
 
   // ---------- upload ----------
+  let pasteSerial = 0;
   const uploadTo = async (dir, items) => {
     if (!items.length) return;
     const label = h('div', null, '准备上传…');
-    const bar = h('div', { style: { width: '0%' } });
+    const bar = h('div', { style: { width: '0%' }, 'data-upload-progress': true });
     const dlg = modal({ title: '上传到 /' + dir, body: h('div', { style: { width: '420px' } }, h('div', { class: 'progress' }, bar), h('div', { class: 'progress-label' }, label)), closable: false });
-    let n = 0;
+    const base = cpath(), total = items.reduce((sum, item) => sum + item.file.size, 0), uploaded = [];
+    let sent = 0;
     try {
       for (const it of items) {
-        label.textContent = `${++n} / ${items.length} · ${it.rel}`;
-        bar.style.width = (n / items.length * 100) + '%';
-        await api('PUT', cpath() + '/files/upload' + qs({ root: 'contest', path: joinPath(dir, it.rel) }), undefined, { raw: it.file });
+        label.textContent = `${uploaded.length + 1} / ${items.length} · ${it.rel}`;
+        await api('PUT', base + '/files/upload' + qs({ root: 'contest', path: joinPath(dir, it.rel) }), undefined, { raw: it.file, onUploadProgress: loaded => {
+          const count = sent + loaded;
+          bar.style.width = (total ? count / total * 100 : (uploaded.length + 1) / items.length * 100) + '%';
+          label.textContent = `${uploaded.length + 1} / ${items.length} · ${it.rel} · ${formatSize(count)} / ${formatSize(total)}` + (loaded === it.file.size ? ' · 处理中…' : '');
+        } });
+        sent += it.file.size; uploaded.push(it);
       }
       toast(`已上传 ${items.length} 个文件`);
     } catch (e) { fail(e); } finally {
       dlg.close(true);
       F.expanded.add(dir);
-      reload(dir === F.path ? [...new Set(items.map((it) => it.rel.split('/')[0]))] : undefined);
+      reload(dir === F.path ? [...new Set(uploaded.map((it) => it.rel.split('/')[0]))] : undefined);
     }
   };
   const unzipTo = async (dir, file) => {
@@ -2317,9 +2366,11 @@ async function renderFilesTab(page) {
       onClose: resolve,
     }));
     if (!ok) return;
-    const dlg = modal({ title: '正在解压…', body: h('div', { class: 'progress', style: { width: '360px' } }, h('div', { style: { width: '100%' } })), closable: false });
+    const bar = h('div', { style: { width: '0%' } }), label = h('div', { class: 'progress-label' }, '准备上传…');
+    const dlg = modal({ title: '上传并解压', body: h('div', { style: { width: '400px' } }, h('div', { class: 'progress' }, bar), label), closable: false });
     try {
-      const r = await api('POST', cpath() + '/files/unzip' + qs({ root: 'contest', path: dir, stripTop: strip.checked ? 1 : 0 }), undefined, { raw: file });
+      const r = await api('POST', cpath() + '/files/unzip' + qs({ root: 'contest', path: dir, stripTop: strip.checked ? 1 : 0 }), undefined, { raw: file,
+        onUploadProgress: (sent, total) => { bar.style.width = (total ? sent / total * 100 : 0) + '%'; label.textContent = sent === total ? '正在解压…' : `${formatSize(sent)} / ${formatSize(total)}`; } });
       toast(`已解压 ${r.files} 个文件`);
     } catch (e) { fail(e); } finally { dlg.close(true); reload(); }
   };
@@ -2562,6 +2613,14 @@ async function renderFilesTab(page) {
   // ---------- keyboard ----------
   S.fsView = {
     root,
+    paste: (event) => {
+      pasteSerial++;
+      const clipboard = event.clipboardData;
+      const files = [...(clipboard?.files || [])];
+      if (!files.length) for (const item of clipboard?.items || []) if (item.kind === 'file') { const file = item.getAsFile(); if (file) files.push(file); }
+      if (files.length) { event.preventDefault(); uploadTo(F.path, files.map(file => ({ file, rel: file.name }))); }
+      else if (F.clip) { event.preventDefault(); paste(); }
+    },
     keydown: (e) => {
       const ctrl = e.ctrlKey || e.metaKey;
       const k = e.key;
@@ -2583,7 +2642,12 @@ async function renderFilesTab(page) {
       if (ctrl && k.toLowerCase() === 'a') { e.preventDefault(); F.selected = new Set(visible.map((x) => x.name)); paint(); return; }
       if (ctrl && k.toLowerCase() === 'c') { e.preventDefault(); setClip('copy'); return; }
       if (ctrl && k.toLowerCase() === 'x') { e.preventDefault(); setClip('cut'); return; }
-      if (ctrl && k.toLowerCase() === 'v') { e.preventDefault(); paste(); return; }
+      if (ctrl && k.toLowerCase() === 'v') {
+        // Leave the native paste event enabled so OS clipboard files can arrive.
+        const serial = ++pasteSerial;
+        setTimeout(() => { if (serial === pasteSerial && document.body.contains(root) && !$('#modal-root').childElementCount) paste(); }, 100);
+        return;
+      }
       if (e.altKey && k.toLowerCase() === 'n') { e.preventDefault(); if (e.shiftKey) newFolder(); else newFile(); return; }
       if (e.altKey && k.toLowerCase() === 'u') { e.preventDefault(); uploadFiles(); return; }
       if (ctrl && k.toLowerCase() === 'b') { e.preventDefault(); compileSelected(); return; }
@@ -2598,6 +2662,11 @@ document.addEventListener('keydown', (e) => {
   if (!v || !document.body.contains(v.root)) return;
   if (S.menu || $('#modal-root').childElementCount || typing(e)) return;
   v.keydown(e);
+});
+document.addEventListener('paste', event => {
+  const view = S.fsView;
+  if (!view || !document.body.contains(view.root) || $('#modal-root').childElementCount || typing(event)) return;
+  view.paste(event);
 });
 
 async function chooseTemplate() {
@@ -2645,6 +2714,27 @@ function pickDataFile(title, accept = null) {
     list.ondblclick = () => { if (choose() !== false) dialog.close(true); };
     draw();
   });
+}
+
+function chooseJudgeTasks(initial) {
+  const contest = S.contest, selected = new Set(initial || contest.tasks.map((_, i) => i));
+  const choices = contest.tasks.map((task, i) => h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: selected.has(i), 'data-judge-task': i,
+    onchange: event => { if (event.target.checked) selected.add(i); else selected.delete(i); dialog.foot.lastChild.disabled = !selected.size; } }), task.problemTitle));
+  const selectAll = checked => {
+    selected.clear();
+    choices.forEach((label, index) => { label.firstChild.checked = checked; if (checked) selected.add(index); });
+    dialog.foot.lastChild.disabled = !selected.size || !contest.contestants.length;
+  };
+  const dialog = modal({ title: '评测题目',
+    body: h('div', { class: 'judge-task-choices' }, h('div', { class: 'hint' }, `对当前 ${contest.contestants.length} 名选手评测所选题目`),
+      h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => selectAll(true) }, '全选'), h('button', { class: 'small', onclick: () => selectAll(false) }, '全不选')), choices),
+    buttons: [{ label: '取消' }, { label: '开始评测', primary: true, onClick: async () => {
+      if (!selected.size || S.contest.name !== contest.name) return false;
+      const tasks = [...selected].sort((a, b) => a - b);
+      return startJudge('selected', contest.contestants.map(contestant => ({ contestant: contestant.name, tasks })));
+    } }],
+  });
+  dialog.foot.lastChild.disabled = !selected.size || !S.contest.contestants.length;
 }
 
 function compileDialog(path, onDone, options = {}) {
@@ -2805,7 +2895,8 @@ async function startJudge(mode, items, extra = {}) {
     await reloadContest();
     if (location.hash.includes('/contest/')) route(); else renderJudgePanel();
     startJudgePolling();
-  } catch (e) { fail(e); }
+    return true;
+  } catch (e) { fail(e); return false; }
 }
 
 // Remove every job of the open contest from the queue (stops it if it is being judged).
