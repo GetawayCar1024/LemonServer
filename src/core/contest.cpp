@@ -179,7 +179,12 @@ void Contest::clearPath(const QString &curDir) {
 void Contest::judge(const QVector<std::pair<Contestant *, int>> &judgingTasks) {
 	LOG("Start Judging");
 	controller = new JudgingController(settings);
+	judgingCanceled = false;
 	connect(controller, &JudgingController::taskJudged, this, &Contest::taskJudgingFinished);
+	QMap<Contestant *, QDateTime> previousJudgingTime;
+	for (auto [contestant, i] : judgingTasks)
+		if (! previousJudgingTime.contains(contestant))
+			previousJudgingTime.insert(contestant, contestant->getJudingTime());
 
 	for (auto [contestant, i] : judgingTasks) {
 		TaskJudger *taskJudger = new TaskJudger();
@@ -209,6 +214,12 @@ void Contest::judge(const QVector<std::pair<Contestant *, int>> &judgingTasks) {
 
 	eventLoop->exec();
 
+	if (judgingCanceled) {
+		// nothing of these contestants was judged again: their results (and judging time) are unchanged
+		for (auto it = previousJudgingTime.cbegin(); it != previousJudgingTime.cend(); ++it)
+			if (! controller->updatedContestants().contains(it.key()))
+				it.key()->setJudgingTime(it.value());
+	}
 	delete eventLoop;
 	delete controller;
 	controller = nullptr;
@@ -238,6 +249,13 @@ void Contest::judgeAll() {
 void Contest::stopJudgingSlot() {
 	if (controller)
 		controller->stop();
+}
+
+void Contest::cancelJudgingSlot() {
+	if (controller) {
+		judgingCanceled = true;
+		controller->cancel();
+	}
 }
 
 void Contest::writeToJson(QJsonObject &out) {

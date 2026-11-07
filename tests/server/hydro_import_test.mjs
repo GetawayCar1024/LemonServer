@@ -99,7 +99,7 @@ subtasks:
 
 test('checker sources require a successful compile before assignment', () => {
   const source = parse('checker_type: testlib\nchecker: checker.cpp\n');
-  assert.deepEqual(source.checkerSource, { path: 'sum/checker.cpp', comparisonMode: 5 });
+  assert.deepEqual(source.checkerSource, { path: 'sum/checker.cpp', comparisonMode: 4 });
   assert.equal(source.patch.specialJudge, undefined);
   const executable = parse('checker_type: lemon\nchecker: checker.exe\n');
   assert.equal(executable.patch.specialJudge, 'sum/checker.exe');

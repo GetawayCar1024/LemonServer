@@ -45,9 +45,11 @@ void JudgingController::assign() {
 void JudgingController::finishTask(QFutureWatcher<TaskResult> *watcher) {
 	const auto task = runningTasks.take(watcher);
 	if (watcher->isCanceled()) {
-		task.contestant->setCheckJudged(task.taskId, false);
+		if (! keepPrevious)
+			task.contestant->setCheckJudged(task.taskId, false);
 	} else {
 		task.contestant->applyResult(task.taskId, watcher->result());
+		updated.insert(task.contestant);
 	}
 	delete task.judger;
 	watcher->deleteLater();
@@ -69,6 +71,11 @@ void JudgingController::start() {
 		sleepInhibitor = std::make_unique<SleepInhibitor>(tr("Judging submissions"));
 	isJudging = true;
 	assign();
+}
+
+void JudgingController::cancel() {
+	keepPrevious = true;
+	stop();
 }
 
 void JudgingController::stop() {

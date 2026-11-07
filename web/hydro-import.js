@@ -87,7 +87,8 @@
       const checker = resolve(source, 'checker');
       const mode = config.checker_type === 'testlib' ? 5 : 4;
       if (checker) {
-        if (/\.(?:cpp|cc|cxx|c)$/i.test(checker)) checkerSource = { path: checker, comparisonMode: mode };
+        // compiled with the bundled Testlib, a Testlib checker also runs as a Lemon checker
+        if (/\.(?:cpp|cc|cxx|c)$/i.test(checker)) checkerSource = { path: checker, comparisonMode: 4 };
         else if (/\.(?:py|js|ts|java|cs|pas|sh|ya?ml|json)$/i.test(checker)) warn('checker', '此类校验器不能直接执行');
         else Object.assign(patch, { specialJudge: checker, comparisonMode: mode });
       }

@@ -73,7 +73,9 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   for (let i = 0; i < 600; i++) { if (!(await api('GET', '/api/judge/status')).judging) break; await delay(50); }
   assert.equal((await api('GET', contest + '/contestants/alice')).details[0].taskScore, 60);
   await api('PUT', contest + '/files/upload?' + new URLSearchParams({ root: 'data', path: 'checkers/ok.cpp' }), undefined,
-    '#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);quitf(_ok,"accepted");}\n');
+    '#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);ouf.readInt();quitf(_ok,"accepted");}\n');
+  await api('PUT', contest + '/files/upload?' + new URLSearchParams({ root: 'data', path: 'sum/pc.cpp' }), undefined,
+    '#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);ouf.readInt();quitf(_pc(50),"half");}\n');
   await open('editor-test');
   await js(`(()=>{const source=document.querySelector('[data-task="0"]');const target=document.querySelector('[data-task="2"]');const r=target.getBoundingClientRect();const dataTransfer=new DataTransfer();source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer}));target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer,clientY:r.bottom-1}));target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer,clientY:r.bottom-1}));source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer}));})()`);
   await wait(`[...document.querySelectorAll('.tree-item:not(.child) .label')].map(x=>x.textContent).join(',') === 'second,third,求和'`);
@@ -84,12 +86,15 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   console.log('PASS task drag reordering and target-index validation');
 
   await click('[data-task="2"] .label');
-  await js(`(()=>{const select=[...document.querySelectorAll('.editor select')].find(el=>[...el.options].some(option=>option.value==='5'));select.value='5';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  assert.equal(await js(`[...document.querySelectorAll('.editor select')].some(el=>[...el.options].some(option=>option.value==='5'))`), false, 'the Testlib mode is only offered to tasks still using it');
+  await js(`(()=>{const select=[...document.querySelectorAll('.editor select')].find(el=>[...el.options].some(option=>option.value==='4'));select.value='4';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await wait(`!!document.querySelector('input[aria-label="从源文件编译"]')`);
   await click('input[aria-label="从源文件编译"]');
   await js(`[...document.querySelectorAll('.editor button')].find(button=>button.textContent==='选择文件').click()`);
-  await wait(`!!document.querySelector('select[aria-label="数据文件"]')`);
-  await js(`document.querySelector('select[aria-label="数据文件"]').value='checkers/ok.cpp';document.querySelector('.modal-back:last-child .modal-foot button:last-child').click()`);
+  await wait(`!!document.querySelector('[role=listbox][aria-label="数据文件"] [data-file]')`);
+  // files of the task's own folder come first; the filter narrows the list, Enter chooses
+  assert.equal(await js(`document.querySelector('[data-file]').dataset.file`), 'sum/pc.cpp');
+  await js(`(()=>{const input=document.querySelector('.file-pick-filter');input.value='ok';input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));})()`);
   await wait(`document.querySelector('input[aria-label="校验器文件"]').value === 'checkers/ok.cpp'`);
   await js(`[...document.querySelectorAll('.editor button')].find(button=>button.textContent==='编译并使用').click()`);
   await wait('!!document.querySelector(".modal-back")');
@@ -98,8 +103,30 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   catch (error) { throw new Error(error.message + '\n' + await js(`document.querySelector('.compile-msg')?.textContent`)); }
   const checked = await api('GET', contest + '/tasks/2');
   assert.match(checked.specialJudge, /^checkers\/ok(?:\.exe)?$/);
-  assert.equal(checked.comparisonMode, 5);
+  assert.equal(checked.comparisonMode, 4);
   console.log('PASS source picker compiles and assigns an executable checker');
+
+  // A plain Testlib checker (registerTestlibCmd) compiled here runs as a Lemon checker and scores like Testlib mode.
+  const judgeAlice = async () => {
+    await api('POST', contest + '/judge', { mode: 'selected', items: [{ contestant: 'alice', tasks: [2] }] });
+    for (let i = 0; i < 600; i++) { if (!(await api('GET', '/api/judge/status')).judging) break; await delay(50); }
+    return (await api('GET', contest + '/contestants/alice')).details[2];
+  };
+  const okResult = await judgeAlice();
+  assert.equal(okResult.taskScore, 60, 'quitf(_ok) gives the full score: ' + JSON.stringify(okResult));
+  const compiled = await api('POST', contest + '/files/compile', { root: 'data', path: 'sum/pc.cpp' });
+  assert.ok(compiled.ok, compiled.output);
+  await api('PUT', contest + '/tasks/2', { specialJudge: compiled.executable.replace(/^data\//, '') });
+  const partial = await judgeAlice();
+  assert.equal(partial.taskScore, 30, '_pc(50) gives half of each subtask: ' + JSON.stringify(partial.message));
+  assert.equal(partial.result[0][0], 2);
+  await api('PUT', contest + '/files/upload?' + new URLSearchParams({ root: 'data', path: 'sum/fail.cpp' }), undefined,
+    '#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);quitf(_fail,"broken");}\n');
+  const failing = await api('POST', contest + '/files/compile', { root: 'data', path: 'sum/fail.cpp' });
+  assert.ok(failing.ok, failing.output);
+  await api('PUT', contest + '/tasks/2', { specialJudge: failing.executable.replace(/^data\//, '') });
+  assert.equal((await judgeAlice()).result[0][0], 8, 'FAIL is an invalid checker, as in Testlib mode');
+  console.log('PASS compiled Testlib checkers run in Lemon mode with Testlib scoring');
 
   const openImport = async () => {
     await js(`[...document.querySelectorAll('.editor button')].find(button=>button.textContent==='导入 Hydro 配置').click()`);

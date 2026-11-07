@@ -48,17 +48,36 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   // B is deliberately made unjudged. Selecting only A must not judge B as a side effect.
   await api('PUT', base + '/files/upload?' + new URLSearchParams({ root: 'source', path: 'alice/b.cpp' }), undefined, source(1));
   await js('reloadContest().then(()=>route())');
-  await wait('!!document.querySelector("[data-judge-tasks]")');
-  await click('[data-judge-tasks]');
+  await wait('!!document.querySelector("[data-judge-scope]")');
+  assert.equal(await js(`document.querySelector('[data-judge-scope]').textContent`), '全部题目');
+  await click('[data-judge-scope]');
   await wait(`!!document.querySelector('[data-judge-task="1"]')`);
   await click('[data-judge-task="1"]');
-  await click('.modal-back:last-child .modal-foot button:last-child');
+  assert.equal(await js(`document.querySelector('[data-judge-scope]').textContent`), 'A');
+  await click('.legend'); // outside: closes the picker
+  assert.equal(await js('!!document.querySelector(".scope-menu")'), false);
+  // "rejudge by state" offers every state, counted within the chosen tasks only
+  await js(`[...document.querySelectorAll('.toolbar button')].find(button=>button.textContent.startsWith('按状态重测')).click()`);
+  await wait('!!document.querySelector(".menu .mi")');
+  const ac = await js(`[...document.querySelectorAll('.menu .mi')].find(item=>item.textContent.startsWith('AC'))?.querySelector('.count').textContent`);
+  assert.equal(ac, '2', 'alice and bob have an AC on task A (dave is not judged yet)');
+  await js('closeMenu()');
+  await js(`[...document.querySelectorAll('.toolbar button')].find(button=>button.textContent==='全部').click()`);
   for (let i = 0; i < 1200; i++) { if (!(await api('GET', '/api/judge/status')).judging) break; await delay(50); }
   const alice = await api('GET', base + '/contestants/alice');
   assert.equal(alice.details[0].judged, true);
   assert.equal(alice.details[1].judged, false);
   assert.equal((await api('GET', base + '/contestants/bob')).details[1].taskScore, 100);
-  console.log('PASS selected-task judging leaves other results untouched');
+  console.log('PASS judge buttons work on the chosen tasks and leave other results untouched');
+
+  await js(`S.judgeTasks=null;route()`);
+  await wait('!!document.querySelector("[data-judge-scope]")');
+  const before = await order();
+  await js(`S.contest.contestants.find(ct=>ct.name==='carol').totalScore=500;rerenderResults({keepOrder:true})`);
+  assert.deepEqual(await order(), before, 'rows keep their places while results come in');
+  await js('rerenderResults()');
+  assert.equal((await order())[0], 'carol');
+  console.log('PASS result rows stay in place during judging and are sorted afterwards');
 
   await js(`S.resultSel=new Set(['bob|1']);S.resultAnchor='bob|1';S.resultSort={key:'task:1',direction:-1};location.hash='#/contest/result-test/tasks'`);
   await wait('!!document.querySelector(".tree-list")');

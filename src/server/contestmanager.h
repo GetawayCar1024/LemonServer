@@ -91,8 +91,10 @@ class ContestManager : public QObject {
 	bool cancelJob(qint64 id, QString *error);
 	// Remove every waiting job of a contest and stop it if it is being judged. Returns the jobs affected.
 	int dequeueContest(const QString &name);
-	// Stop the running job if it belongs to `name`.
+	// Stop the running job if it belongs to `name`: the cells being judged become "not judged".
 	bool stopJudge(const QString &name);
+	// Cancel the running job if it belongs to `name`: every cell not judged to the end keeps its previous result.
+	bool cancelJudge(const QString &name);
 	bool isJudging() const { return judging; }
 	// Being judged or waiting in the queue.
 	bool isBusy(const QString &name) const;
@@ -127,12 +129,14 @@ class ContestManager : public QObject {
 		QString mode() const;
 	};
 
+	// The name of the contest folder as it is on disk (folder names are case-insensitive on Windows).
+	QString canonicalName(const QString &name) const;
 	QString contestDir(const QString &name) const;
 	QString findCdf(const QString &dir) const;
 	Contest *loadContest(const QString &cdfPath, QString *error);
 	void addLoaded(const QString &name, Contest *c, const QString &cdfFile);
 	void unload(const QString &name);
-	void evictIdleContests();
+	void evictIdleContests(const QString &keep);
 	void connectContest(Contest *c);
 	bool saveContest(const QString &name, QString *error = nullptr);
 	void pushEvent(QJsonObject event);
@@ -157,13 +161,15 @@ class ContestManager : public QObject {
 	bool judging = false;
 	bool nextScheduled = false;
 	bool stopRequested = false;
+	bool cancelRequested = false;
+	bool saveScheduled = false;
 	qint64 progressValue = 0;
 	qint64 progressMaximum = 0;
 	int tasksDone = 0;
 	int tasksTotal = 0;
 	QDateTime judgeStarted;
 	QDateTime judgeFinished;
-	QDateTime lastSave;
+	QMap<QString, QDateTime> lastSaved;
 	// cells ("<contestant>\n<task index>") whose source changed while judging; marked again afterwards
 	QSet<QString> changedWhileJudging;
 	qint64 nextEventId = 1;

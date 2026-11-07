@@ -172,7 +172,23 @@ table.results td.selected { box-shadow: inset 0 0 0 2px var(--blue); }
 table.results td.total { font-weight: 700; }
 .result-sort { font: inherit; font-weight: inherit; color: inherit; background: transparent; padding: 0; }
 .result-sort:hover:not(:disabled) { color: var(--accent); background: transparent; }
-.judge-task-choices { width: 360px; max-width: 80vw; max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+/* task scope of the judge buttons */
+.scope-button { gap: 6px; max-width: 220px; }
+.scope-button .scope-label { overflow: hidden; text-overflow: ellipsis; }
+.scope-caret { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; opacity: .6; flex: none; }
+.scope-menu { min-width: 240px; max-width: 360px; }
+.scope-list { max-height: min(50vh, 360px); overflow: auto; }
+.scope-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13.5px; user-select: none; }
+.scope-item:hover { background: var(--fill-soft); }
+.scope-item .mono { font-size: 12px; }
+.scope-all { font-weight: 600; }
+/* detail table: subtasks are groups whose # and score span their rows */
+table.detail-grid { border: 1px solid var(--sep); border-radius: var(--radius); overflow: hidden; }
+table.detail-grid th, table.detail-grid td { border-left: 1px solid var(--sep); border-bottom: 1px solid var(--sep-strong); }
+table.detail-grid .first { border-left: none; }
+table.detail-grid tr.in-group td:not(.span) { border-bottom: 1px dashed var(--sep); }
+table.detail-grid td.span { vertical-align: middle; }
+table.detail-grid tr:last-child td, table.detail-grid td.span.last { border-bottom: none; }
 .legend { display: flex; gap: 8px; padding: 12px 14px; font-size: 12px; color: var(--muted); align-items: center; }
 .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 4px; margin-right: 4px; vertical-align: -2px; }
 
@@ -195,6 +211,22 @@ table.files .icon { display: inline-block; width: 18px; text-align: center; marg
 table.files .actions { visibility: hidden; }
 table.files tr.file-row:hover .actions { visibility: visible; }
 .empty { padding: 40px; text-align: center; color: var(--muted); }
+.fs-search { display: flex; align-items: center; gap: 4px; }
+.fs-search .fs-filter { width: 180px; }
+
+/* data file picker */
+.file-pick-box { width: 520px; max-width: 80vw; display: flex; flex-direction: column; gap: 8px; }
+.file-pick-filter { width: 100%; }
+.file-pick { height: 320px; max-height: 50vh; overflow: auto; border: 1px solid var(--sep); border-radius: var(--radius); background: var(--panel-2); padding: 4px; outline: none; scrollbar-color: var(--fill-strong) transparent; }
+.file-pick:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+.file-pick .empty { padding: 24px; }
+.file-pick-item { display: flex; align-items: baseline; gap: 6px; padding: 5px 8px; border-radius: 6px; cursor: pointer; user-select: none; white-space: nowrap; }
+.file-pick-item:hover { background: var(--fill-soft); }
+.file-pick-item.selected { background: var(--tree-sel); color: #fff; }
+.file-pick-item .icon { width: 18px; text-align: center; flex: none; }
+.file-pick-item .name { font-family: "SF Mono", Menlo, Consolas, "Cascadia Mono", monospace; font-size: 13px; }
+.file-pick-item .dir { margin-left: auto; padding-left: 12px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.file-pick-item.selected .dir { color: rgba(255, 255, 255, .8); }
 
 /* text editor */
 .code-editor { width: min(1000px, 88vw); height: 62vh; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; line-height: 1.5; tab-size: 4; white-space: pre; border-radius: var(--radius); background: var(--panel-2); }
@@ -281,7 +313,7 @@ table.files tr.file-row:hover .actions { visibility: visible; }
 :root[data-theme=dark] table.results td.cell, :root[data-theme=dark] table.results td.total { color: #f2f2f7; }
 .theme-switch { font-size: 13px; }
 /* ---------- popover / context menu ---------- */
-.menu { position: fixed; z-index: 150; min-width: 200px; background: var(--panel); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 5px; animation: pop .12s ease-out; }
+.menu { position: fixed; z-index: 150; min-width: 200px; max-height: calc(100vh - 12px); overflow: auto; background: var(--panel); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 5px; animation: pop .12s ease-out; }
 .menu .mi { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13.5px; white-space: nowrap; }
 .menu .mi:hover:not(.disabled) { background: var(--blue); color: #fff; }
 .menu .mi:hover:not(.disabled) .kbd, .menu .mi:hover:not(.disabled) .count { color: rgba(255, 255, 255, .85); }
@@ -296,6 +328,8 @@ kbd { font-family: inherit; font-size: 11.5px; background: var(--fill); border-r
 .contest-body { flex: 1; min-height: 0; display: flex; gap: 14px; margin: 0 14px 14px; }
 .contest-body .tabpage { margin: 0; flex: 1; min-width: 0; }
 .judge-panel { width: 360px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+/* outside a contest page the panel floats at the right */
+.judge-panel.floating { position: fixed; top: 64px; right: 14px; bottom: 14px; z-index: 40; box-shadow: var(--shadow-lg); animation: pop .15s ease-out; }
 .judge-panel .jp-head { padding: 12px 14px 8px; display: flex; align-items: center; gap: 8px; }
 .judge-panel .jp-head b { font-size: 15px; }
 .judge-panel .jp-head .x { margin-left: auto; background: var(--fill); border-radius: 50%; width: 24px; height: 24px; padding: 0; justify-content: center; font-size: 13px; color: var(--muted); }

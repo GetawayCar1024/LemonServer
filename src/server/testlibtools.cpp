@@ -25,8 +25,47 @@ namespace TestlibTools {
 		QFile f(":/testlib/testlib.h");
 		if (! f.open(QFile::ReadOnly))
 			return {};
+		QByteArray header = f.readAll();
+		// A checker using the usual registerTestlibCmd() also runs as a Lemon checker
+		// (<in> <out> <ans> <full score> <score file> <message file>), scoring like LemonLime's Testlib mode:
+		// _pc(x) is x% of the full score, quitp(p) is p × the full score, FAIL is an invalid checker.
+		const QByteArray entry = "void registerTestlibCmd(int argc, char *argv[]) {\n";
+		const QByteArray lemonEntry =
+		    "void registerLemonChecker(int argc, char* argv[]);\n"
+		    "static bool __lemonserver_lemon_arguments(int argc, char *argv[]) {\n"
+		    "    if (argc != 7) return false;\n"
+		    "    for (int i = 1; i < argc; i++) if (argv[i][0] == '-' && argv[i][1] == '-') return false;\n"
+		    "    const char *p = argv[4];\n"
+		    "    if (!*p) return false;\n"
+		    "    for (; *p; ++p) if (*p < '0' || *p > '9') return false;\n"
+		    "    return true;\n"
+		    "}\n" +
+		    entry +
+		    "    if (__lemonserver_lemon_arguments(argc, argv)) {\n"
+		    "        __lemonserver_testlib_cmd = true;\n"
+		    "        quitpRelativeScoring = true;\n"
+		    "        registerLemonChecker(argc, argv);\n"
+		    "        return;\n"
+		    "    }\n";
+		const QByteArray partial = "        } else if (isPartial)\n            fprintf(scoreFile, \"%d\", pctype);\n";
+		const QByteArray points = "            fprintf(scoreFile, \"%.0f\", partialScore);\n";
+		const QByteArray okScore = "    if (localJudger) {\n        if (result == _ok)\n";
+		const QByteArray flag = "bool localJudger;\n";
+		if (header.contains(entry) && header.contains(partial) && header.contains(points) && header.contains(okScore) &&
+		    header.contains(flag)) {
+			header.replace(flag, flag + "static bool __lemonserver_testlib_cmd = false;\n");
+			header.replace(entry, lemonEntry);
+			header.replace(partial, "        } else if (isPartial)\n"
+			                        "            fprintf(scoreFile, \"%d\", __lemonserver_testlib_cmd ? pctype * perfectScore / 100 : pctype);\n");
+			header.replace(points, "            if (__lemonserver_testlib_cmd) fprintf(scoreFile, \"%d\", int(partialScore));\n"
+			                       "            else fprintf(scoreFile, \"%.0f\", partialScore);\n");
+			header.replace(okScore, "    if (localJudger) {\n"
+			                        "        if (__lemonserver_testlib_cmd && result == _fail)\n"
+			                        "            fprintf(scoreFile, \"-1\");\n"
+			                        "        else if (result == _ok)\n");
+		}
 		// The bundled revision uses fixed-width integer types without including their header.
-		return QByteArray("#include <cstdint>\n") + f.readAll();
+		return QByteArray("#include <cstdint>\n") + header;
 	}
 
 	QStringList templateNames() {

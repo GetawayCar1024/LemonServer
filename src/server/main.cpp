@@ -31,11 +31,64 @@
 #include <chrono>
 #include <cstdio>
 
+#include <atomic>
+#include <csignal>
+
 #ifdef Q_OS_WIN32
 #include <windows.h>
+#else
+#include <QSocketNotifier>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+#ifdef Q_OS_LINUX
+#include <execinfo.h>
 #endif
 
 #define LEMON_MODULE_NAME "ServerMain"
+
+// ---- shutting down cleanly: SIGTERM / SIGINT (systemd stop / restart, Ctrl+C) or closing the console window
+// save every contest instead of losing the results judged since the last save.
+static std::atomic<bool> shutdownDone{false};
+static ContestManager *runningManager = nullptr;
+
+// In the main thread. Quitting also leaves the event loop of a running judge; cancel it first so that
+// whatever is unfinished keeps its previous results.
+static void shutdown() {
+	LOG("Shutting down");
+	if (runningManager && runningManager->isJudging())
+		runningManager->cancelJudge(runningManager->judgingContest());
+	QCoreApplication::quit();
+}
+
+#ifdef Q_OS_WIN32
+static BOOL WINAPI consoleHandler(DWORD) {
+	QMetaObject::invokeMethod(QCoreApplication::instance(), [] { shutdown(); }, Qt::QueuedConnection);
+	// the process is ended when this returns: give the main thread a few seconds to save
+	for (int i = 0; i < 45 && ! shutdownDone; i++)
+		Sleep(100);
+	return TRUE;
+}
+#else
+static int signalPipe[2] = {-1, -1};
+static void quitSignalHandler(int) {
+	const char c = 1;
+	[[maybe_unused]] const auto n = ::write(signalPipe[1], &c, 1);
+}
+#endif
+
+#ifdef Q_OS_LINUX
+// A crash leaves a backtrace in the log (journalctl -u lemonserver), then the process ends as usual.
+static void crashHandler(int sig) {
+	void *frames[64];
+	const int n = backtrace(frames, 64);
+	const char header[] = "LemonServer crashed, backtrace:\n";
+	[[maybe_unused]] const auto w = ::write(STDERR_FILENO, header, sizeof(header) - 1);
+	backtrace_symbols_fd(frames, n, STDERR_FILENO);
+	std::signal(sig, SIG_DFL);
+	std::raise(sig);
+}
+#endif
 
 static void initLogger() {
 	auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
@@ -163,8 +216,33 @@ int main(int argc, char *argv[]) {
 		printf("  The access token is still the default one (123456). Please change it in the web page.\n");
 	fflush(stdout);
 
+	runningManager = &manager;
+#ifdef Q_OS_WIN32
+	SetConsoleCtrlHandler(consoleHandler, TRUE);
+#else
+	if (::socketpair(AF_UNIX, SOCK_STREAM, 0, signalPipe) == 0) {
+		auto *notifier = new QSocketNotifier(signalPipe[0], QSocketNotifier::Read, &app);
+		QObject::connect(notifier, &QSocketNotifier::activated, &app, [] {
+			char c;
+			[[maybe_unused]] const auto n = ::read(signalPipe[0], &c, 1);
+			shutdown();
+		});
+		struct sigaction action {};
+		action.sa_handler = quitSignalHandler;
+		sigemptyset(&action.sa_mask);
+		action.sa_flags = SA_RESTART;
+		sigaction(SIGTERM, &action, nullptr);
+		sigaction(SIGINT, &action, nullptr);
+	}
+#endif
+#ifdef Q_OS_LINUX
+	for (int sig : {SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL})
+		std::signal(sig, crashHandler);
+#endif
 	const int ret = app.exec();
 	manager.closeAll();
 	settings.saveSettings();
+	runningManager = nullptr;
+	shutdownDone = true;
 	return ret;
 }

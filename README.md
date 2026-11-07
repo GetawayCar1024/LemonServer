@@ -16,11 +16,11 @@ LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project
 | 比赛列表：新建（只需输入比赛名，自动存放在默认比赛位置）、打开、删除、改名、克隆（可选是否复制选手程序和成绩）；导入已配置好的比赛（含 .cdf 的文件夹或 zip，可拖拽） | 新建比赛 / 打开比赛 / 修改比赛名 |
 | 试题页：试题／测试点设置、右键操作、自动／批量添加，按钮或拖动重排题目；支持粘贴或选择本地 Hydro 配置导入 | SummaryTree、TaskEditWidget、TestCaseEditWidget、AddTestCasesWizard |
 | 测试点管理器：拖动连续选择、Ctrl/Shift 多选、双击编辑、右键修改／批量修改／绑定／合并／拆分／移动／删除、撤销重做；子任务浅深交替，依赖随调整保留 | ExtTestCaseModifier |
-| 结果页：成绩表（按选手名、单题或总分排序；单击选中／取消，Ctrl / Shift / 拖动多选；右键菜单“详情 / 评测 / 删除选手”同 LemonLime，另有“源程序”；Delete 删除选手）、评测选中 / 全部 / 指定题目 / 未评测 / 按状态重测（NS、CE、TLE、WA…，显示每种状态的数量）、停止评测、侧边栏中的实时评测日志与进度、全局评测队列（所有比赛依次评测，评测期间可编辑其他比赛，正在评测或排队的比赛不能修改，可“全部出队”）、选手详细结果、查看源程序、删除选手、整理选手文件 | ResultViewer、JudgingDialog、DetailDialog、清理文件 |
+| 结果页：成绩表（按选手名、单题或总分排序，同分按总用时、再按选手名；评测期间行的位置不变；单击选中／取消，Ctrl / Shift / 拖动多选；右键菜单“详情 / 评测 / 删除选手”同 LemonLime，另有“源程序”；Delete 删除选手）、评测按钮左侧选择题目（默认全部）后评测选中 / 全部 / 未评测 / 按状态重测（所有编译状态与测试点结果，显示每种状态的数量）、停止评测（正在评测的变为未评测）与取消评测（保留上次结果）、侧边栏中的实时评测日志与进度、全局评测队列（所有比赛依次评测，评测期间可编辑其他比赛，正在评测或排队的比赛不能修改，可“全部出队”）、选手详细结果、查看源程序、删除选手、整理选手文件 | ResultViewer、JudgingDialog、DetailDialog、清理文件 |
 | 导出 result.html / result.htm / CSV（下载，或保存到比赛文件夹） | 导出结果 |
 | 统计页，可导出 statistics.html | StatisticsBrowser |
-| 文件：当前比赛文件夹的文件系统（左侧目录树），上传文件 / 文件夹 / zip 到任意文件夹（可拖到目录树中的文件夹上或 Ctrl+V 粘贴系统剪贴板文件，按实际字节显示上传进度）；单击/Ctrl/Shift 多选、拖动移动（Ctrl 复制）、复制剪切粘贴、移动到…、右键菜单、筛选、排序，以及常用快捷键（按 ? 查看）；在线编辑 100 KiB 以下的文本文件（保留原编码和换行符，显示最后修改时间，被他人修改过时提示冲突）；新建、重命名、删除、下载（文件夹打包 zip） | 打开比赛文件夹 |
-| 校验器：选择已有程序，或勾选“从源文件编译”，选择服务器文件／本地上传后编译使用；文件系统中仍可右键或 Ctrl+B 编译，提供 Testlib 模板 | 手动编译校验器 |
+| 文件：当前比赛文件夹的文件系统（左侧目录树），上传文件 / 文件夹 / zip 到任意文件夹（可拖到目录树中的文件夹上或 Ctrl+V 粘贴系统剪贴板文件，按实际字节显示上传进度）；单击/Ctrl/Shift 多选、拖动移动（Ctrl 复制）、复制剪切粘贴、移动到…、右键菜单、查找（回车开始）、排序，以及常用快捷键（按 ? 查看）；在线编辑 100 KiB 以下的文本文件（保留原编码和换行符，显示最后修改时间，被他人修改过时提示冲突）；新建、重命名、删除、下载（文件夹打包 zip） | 打开比赛文件夹 |
+| 校验器（Lemon 方式）：选择已有程序，或勾选“从源文件编译”，选择服务器文件／本地上传（存放在 `data/<该题目录>/`）后编译使用；用本服务器编译的 Testlib 校验器（`registerTestlibCmd`）可直接使用，得分与 Testlib 方式一致；文件系统中仍可右键或 Ctrl+B 编译，提供 Testlib 模板 | 手动编译校验器 |
 | 比赛设置：down.zip（可不设置，供 CodeHub 导入）：上传或指定比赛文件夹中的文件。LemonServer 没有比赛时间，成绩与评测详情任何时候都可查看 | —（LemonServer 专有） |
 | 浅色 / 深色 / 跟随系统，绿色操作与选择控件，保留判题结果配色 | 深色模式 |
 | 设置：常规设置、编译器（含自动检测）、评测语言与配色 | 选项对话框、添加编译器向导 |
@@ -111,7 +111,9 @@ curl -X POST -H "Authorization: Bearer $KEY" $C/add-tasks                 # 自�
 curl -X POST -H "Authorization: Bearer $KEY" --data-binary @source.zip "$C/files/unzip?root=source&stripTop=1"
 curl -X POST -H "Authorization: Bearer $KEY" $C/refresh                   # 刷新选手列表
 curl -X POST -H "Authorization: Bearer $KEY" -d '{"mode":"all"}' $C/judge
+curl -X POST -H "Authorization: Bearer $KEY" -d '{"mode":"unjudged","tasks":[0]}' $C/judge   # 只评测第 0 题
 curl -H "Authorization: Bearer $KEY" "$C/judge/status?since=0"           # 进度 + 每个测试点的结果事件
+curl -X POST -H "Authorization: Bearer $KEY" $C/judge/cancel              # 取消：未评测完的保留上次结果（stop 则变为未评测）
 curl -H "Authorization: Bearer $KEY" -o result.html "$C/export?format=html"
 
 # down.zip，保存在比赛文件夹的 lemonserver.json 中
@@ -119,9 +121,9 @@ curl -X PUT -H "Authorization: Bearer $KEY" --data-binary @down.zip $C/down-zip
 
 # 导入一个配置好的比赛（zip 内含 .cdf、data、source）
 curl -H "Authorization: Bearer $KEY" --data-binary @contest.zip "$S/api/import-contest?name=NOIP2026&overwrite=1"
-# 用 Testlib for Lemons 在服务器上编译 data/aplusb/checker.cpp，并设为第 0 题的 Testlib 校验器
+# 用 Testlib for Lemons 在服务器上编译 data/aplusb/checker.cpp，并设为第 0 题的校验器（Lemon 方式）
 curl -H "Authorization: Bearer $KEY" -d '{"root":"data","path":"aplusb/checker.cpp"}' $C/files/compile
-curl -X PUT -H "Authorization: Bearer $KEY" -d '{"comparisonMode":5,"specialJudge":"aplusb/checker.exe"}' $C/tasks/0
+curl -X PUT -H "Authorization: Bearer $KEY" -d '{"comparisonMode":4,"specialJudge":"aplusb/checker.exe"}' $C/tasks/0
 ```
 
 `tests/server/smoke_test.py` 是一个覆盖主要接口的端到端测试（需要服务器端有 g++）：
@@ -132,7 +134,7 @@ python tests/server/smoke_test.py http://127.0.0.1:8080 /path/to/empty/contest-r
 
 路径回归自行启动隔离的临时服务器：`python tests/server/task_paths_test.py /path/to/LemonServer`。前端保存队列使用 `node --test tests/server/autosave_test.mjs`；题目折叠及立即评测的浏览器回归为 `node tests/server/ui_test.mjs /path/to/LemonServer --embedded`（需要 Node.js 24 和 Chromium，可用 `CHROME_BIN` 指定浏览器）。
 
-Hydro 转换回归：`node --test tests/server/hydro_import_test.mjs`。管理器、拖排、校验器和导入的浏览器回归：`node tests/server/editor_ui_test.mjs /path/to/LemonServer --embedded`。与原版评测器的对比方法和保留差异见 [评测一致性](docs/judging-compatibility.md)。
+评测队列回归（取消／停止、相同内容上传、多比赛排队、强制结束后的保存）：`node tests/server/judge_queue_test.mjs /path/to/LemonServer`（需要 g++）。Hydro 转换回归：`node --test tests/server/hydro_import_test.mjs`。管理器、拖排、校验器和导入的浏览器回归：`node tests/server/editor_ui_test.mjs /path/to/LemonServer --embedded`。与原版评测器的对比方法和保留差异见 [评测一致性](docs/judging-compatibility.md)。
 
 ## 代码结构与对上游的改动
 

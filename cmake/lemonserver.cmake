@@ -3,7 +3,11 @@
 # ==================================================================================
 
 find_package(${LEMON_QT_LIBNAME} ${LEMON_QT_MIN_VERSION} COMPONENTS Network HttpServer REQUIRED)
-# QZipReader / QZipWriter come from the private QtCore API (target ${LEMON_QT_LIBNAME}::CorePrivate)
+# QZipReader / QZipWriter come from the private QtCore API (target ${LEMON_QT_LIBNAME}::CorePrivate).
+# Qt 6.9 and later only define private targets when they are asked for.
+if(${LEMON_QT_LIBNAME}_VERSION VERSION_GREATER_EQUAL 6.9)
+    find_package(${LEMON_QT_LIBNAME} COMPONENTS CorePrivate REQUIRED)
+endif()
 
 set(LEMON_BASEDIR_SERVER ${CMAKE_SOURCE_DIR}/src/server)
 file(GLOB LEMON_SERVER_SOURCES

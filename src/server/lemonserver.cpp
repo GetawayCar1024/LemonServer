@@ -346,6 +346,14 @@ namespace {
 	bool sameOrInside(const QString &path, const QString &dir) {
 		return path.compare(dir, kPathCase) == 0 || path.startsWith(dir + "/", kPathCase);
 	}
+	// The file exists and already has exactly this content.
+	bool sameFileContent(const QString &path, const QByteArray &content) {
+		const QFileInfo fi(path);
+		if (! fi.isFile() || fi.size() != content.size())
+			return false;
+		QFile f(path);
+		return f.open(QFile::ReadOnly) && f.readAll() == content;
+	}
 } // namespace
 
 bool LemonServer::isReservedFile(const QString &abs) const {
@@ -1453,7 +1461,7 @@ void LemonServer::setupContestRoutes() {
 			             return errorResponse(Status::BadRequest, "invalid JSON");
 		             const QString mode = body["mode"].toString("all");
 		             QJsonObject request{{"mode", mode}};
-		             for (const char *key : {"items", "compileStates", "resultStates", "refresh"})
+		             for (const char *key : {"items", "compileStates", "resultStates", "refresh", "tasks"})
 			             if (body.contains(key))
 				             request[key] = body[key];
 		             QJsonObject job;
@@ -1462,7 +1470,8 @@ void LemonServer::setupContestRoutes() {
 		             if (! manager->enqueueJudge(request, &job, &error, &nothingToJudge))
 			             return QHttpServerResponse(QJsonObject{{"error", error}, {"nothingToJudge", nothingToJudge}},
 			                                        nothingToJudge ? Status::Conflict : Status::BadRequest);
-		             auto status = manager->judgeStatus(0);
+		             // the log only when this job started right away (otherwise it is another job's log)
+		             auto status = manager->judgeStatus(job["position"].toInt() == 0 ? 0 : std::numeric_limits<qint64>::max());
 		             status["job"] = job;
 		             return jsonResponse(status, Status::Accepted);
 	             });
@@ -1486,8 +1495,14 @@ void LemonServer::setupContestRoutes() {
 		             QMap<int, int> compileCount, resultCount;
 		             int unjudged = 0;
 		             const auto tasks = c->getTaskList();
+		             // ?tasks=0,2: only count these tasks
+		             QSet<int> only;
+		             for (const auto &part : queryValue(req, "tasks").split(',', Qt::SkipEmptyParts))
+			             only.insert(part.toInt());
 		             for (auto *ct : c->getContestantList()) {
 			             for (int j = 0; j < tasks.size(); j++) {
+				             if (! only.isEmpty() && ! only.contains(j))
+					             continue;
 				             if (! ct->getCheckJudged(j)) {
 					             unjudged++;
 					             continue;
@@ -1515,6 +1530,16 @@ void LemonServer::setupContestRoutes() {
 		             if (auto r = denied(req))
 			             return std::move(*r);
 		             if (! manager->stopJudge(name))
+			             return errorResponse(Status::Conflict, tr("This contest is not being judged"));
+		             return okResponse();
+	             });
+
+	// Like stop, but whatever is not judged to the end keeps its previous result instead of becoming unjudged.
+	server.route("/api/contests/<arg>/judge/cancel", Method::Post,
+	             [this](const QString &name, const QHttpServerRequest &req) {
+		             if (auto r = denied(req))
+			             return std::move(*r);
+		             if (! manager->cancelJudge(name))
 			             return errorResponse(Status::Conflict, tr("This contest is not being judged"));
 		             return okResponse();
 	             });
@@ -1718,6 +1743,11 @@ void LemonServer::setupFileRoutes() {
 			             return errorResponse(Status::BadRequest, tr("A file name is required"));
 		             if (isReservedFile(abs))
 			             return errorResponse(Status::BadRequest, tr("This item cannot be edited"));
+		             // The same content again (e.g. CodeHub retrying or resyncing): keep the file and its results.
+		             if (sameFileContent(abs, req.body()))
+			             return okResponse({{"size", double(req.body().size())},
+			                                {"unchanged", true},
+			                                {"modified", QFileInfo(abs).lastModified().toString("yyyy-MM-dd hh:mm:ss")}});
 		             QDir().mkpath(QFileInfo(abs).absolutePath());
 		             QFile f(abs);
 		             if (! f.open(QFile::WriteOnly))
@@ -1764,14 +1794,17 @@ void LemonServer::setupFileRoutes() {
 		             const QByteArray data = body["encoding"].toString() == "local" ? text.toLocal8Bit() : text.toUtf8();
 		             if (data.size() >= kEditableFileSize)
 			             return errorResponse(Status::BadRequest, tr("Files edited online must be smaller than 100 KiB"));
+		             const bool unchanged = sameFileContent(abs, data);
 		             QDir().mkpath(fi.absolutePath());
-		             QFile f(abs);
-		             if (! f.open(QFile::WriteOnly))
-			             return errorResponse(Status::InternalServerError, tr("Cannot write %1").arg(abs));
-		             f.write(data);
-		             f.close();
-		             fi.refresh();
-		             sourceChanged(abs);
+		             if (! unchanged) {
+			             QFile f(abs);
+			             if (! f.open(QFile::WriteOnly))
+				             return errorResponse(Status::InternalServerError, tr("Cannot write %1").arg(abs));
+			             f.write(data);
+			             f.close();
+			             fi.refresh();
+			             sourceChanged(abs);
+		             }
 		             LOG("Edited", abs, "from", req.remoteAddress().toString());
 		             return okResponse({{"size", double(fi.size())},
 		                                {"modified", fi.lastModified().toString("yyyy-MM-dd hh:mm:ss")},

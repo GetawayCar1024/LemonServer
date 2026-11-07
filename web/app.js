@@ -29,11 +29,11 @@ const RESULT = [
 const COMPILE_STATE = ['编译成功', '未找到源程序', '编译错误', '编译超时', '无法运行编译器', '未找到 grader'];
 const RESULT_ABBR = ['AC', 'WA', 'PC', 'TLE', 'MLE', 'CSP', 'FE', 'RE', 'ISPJ', 'SPJ-TLE', 'SPJ-RE', 'SKIP', 'IE', 'PE', 'OLE'];
 const COMPILE_ABBR = ['OK', 'NS', 'CE', 'CTLE', 'IC', 'NG'];
-// states offered by "rejudge by state", in display order
-const REJUDGE_COMPILE = [1, 2, 3, 4, 5];
-const REJUDGE_RESULT = [1, 2, 3, 4, 7, 13, 14, 5, 6, 8, 9, 10, 12];
+// states offered by "rejudge by state" (all of them), in display order
+const REJUDGE_COMPILE = [0, 1, 2, 3, 4, 5];
+const REJUDGE_RESULT = [0, 1, 2, 3, 4, 7, 13, 14, 5, 6, 8, 9, 10, 12, 11];
 const TASK_TYPES = ['传统', '提交答案', '交互', '通信', '通信（可执行）'];
-const COMPARISON_MODES = ['逐行比较', '忽略多余空格', '外部工具 (diff)', '实数比较', 'Lemon 校验器', 'Testlib 校验器'];
+const COMPARISON_MODES = ['逐行比较', '忽略多余空格', '外部工具 (diff)', '实数比较', '校验器', 'Testlib 校验器（旧）'];
 const COMPILER_TYPES = ['编译型', '解释型（字节码）', '解释型'];
 const EDIT_LIMIT = 100 * 1024;
 
@@ -165,14 +165,22 @@ function toast(msg, type = '') {
 }
 const fail = (e) => toast(e.message || String(e), 'error');
 
-function modal({ title, body, buttons = [], onClose, closable = true, wide, beforeClose }) {
+// onSaveKey(close): Ctrl+S while this is the topmost dialog.
+function modal({ title, body, buttons = [], onClose, closable = true, wide, beforeClose, onSaveKey }) {
   const root = $('#modal-root');
   const back = h('div', { class: 'modal-back' });
   let closed = false;
+  const saveKey = (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's' || root.lastElementChild !== back) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    Promise.resolve(onSaveKey(close)).catch(fail);
+  };
+  if (onSaveKey) document.addEventListener('keydown', saveKey, true);
   const close = async (force) => {
     if (closed) return;
     if (!force && beforeClose && !(await beforeClose())) return;
     closed = true;
+    document.removeEventListener('keydown', saveKey, true);
     back.remove();
     if (onClose) onClose();
   };
@@ -255,6 +263,11 @@ function showMenu(x, y, items) {
       onclick: (e) => { e.stopPropagation(); if (it.disabled) return; closeMenu(); it.onClick(); },
     }, it.label, it.kbd ? h('span', { class: 'kbd' }, it.kbd) : null, it.count !== undefined ? h('span', { class: 'count' }, it.count) : null));
   }
+  openPopup(menu, x, y);
+}
+// Show a popup element at (x, y); it closes on an outside click, Esc or when the window loses focus.
+function openPopup(menu, x, y) {
+  closeMenu();
   document.body.appendChild(menu);
   const r = menu.getBoundingClientRect();
   menu.style.left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
@@ -273,6 +286,7 @@ function closeMenu() {
   window.removeEventListener('blur', closeMenu);
 }
 const menuBelow = (el, items) => { const r = el.getBoundingClientRect(); showMenu(r.left, r.bottom + 4, items); };
+const popupBelow = (el, popup) => { const r = el.getBoundingClientRect(); openPopup(popup, r.left, r.bottom + 4); };
 const typing = (e) => { const t = e.target; return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable); };
 
 function debounce(fn, ms) {
@@ -681,6 +695,8 @@ async function renderContest(name, tab) {
     S.resultSel = new Set();
     S.resultAnchor = null;
     S.resultSort = { key: 'total', direction: -1 };
+    S.resultRows = null;
+    S.judgeTasks = null;
     S.fs = { path: '', expanded: new Set(['']), cache: new Map(), selected: new Set() };
   }
   await loadDataFiles();
@@ -694,17 +710,25 @@ async function renderContest(name, tab) {
         class: k === tab ? 'active' : '', onclick: () => go('#/contest/' + enc(name) + '/' + k),
       }, label))),
       h('button', { class: 'small', onclick: openContestProperties }, '比赛设置'),
-      S.contest.busy ? h('span', { class: 'busy-bar' }, S.contest.judging ? '评测中，不能修改' : `排队中（${S.contest.queuedJobs} 项），不能修改`,
-        h('button', { class: 'small', onclick: dequeueContest }, '全部出队')) : null,
+      h('span', { id: 'busy-slot', style: { display: 'contents' } }),
       h('div', { class: 'path', title: S.contest.directory }, S.contest.directory),
       h('button', { class: 'small hidden', id: 'judge-panel-toggle', onclick: () => { S.judge.panelOpen = true; renderJudgePanel(); } }, '评测日志')),
     h('div', { class: 'contest-body' }, page, h('div', { id: 'judge-panel-slot', style: { display: 'contents' } }))), title);
+  renderBusyBar();
   renderJudgePanel();
   if (tab === 'tasks') renderTasksTab(page);
   else if (tab === 'results') renderResultsTab(page);
   else if (tab === 'statistics') await renderStatisticsTab(page);
   else if (tab === 'files') await renderFilesTab(page);
   checkJudgeStatus();
+}
+
+function renderBusyBar() {
+  const slot = $('#busy-slot');
+  if (!slot) return;
+  const c = S.contest;
+  slot.replaceChildren(...(c.busy ? [h('span', { class: 'busy-bar' }, c.judging ? '评测中，不能修改' : `排队中（${c.queuedJobs} 项），不能修改`,
+    h('button', { class: 'small', onclick: dequeueContest }, '全部出队'))] : []));
 }
 
 async function renameContest() {
@@ -791,7 +815,11 @@ function renderTasksTab(page) {
       if (S.sel.testCase >= 0) items.push({ label: '删除测试点', kbd: 'Delete', danger: true, disabled: judging, onClick: () => deleteTestCase(S.sel.task, S.sel.testCase) });
       else items.push('sep', { label: '测试点管理器', disabled: judging, onClick: () => openTestCaseManager(S.sel.task) },
         { label: '导入 Hydro 配置…', disabled: judging, onClick: () => importHydroConfig(S.sel.task) });
-      items.push('sep', { label: '评测此题…', disabled: !S.contest.contestants.length, onClick: () => chooseJudgeTasks([S.sel.task]) });
+      items.push('sep', { label: '评测此题', disabled: !S.contest.contestants.length, onClick: () => {
+        const task = S.sel.task;
+        S.judgeTasks = new Set([task]); // the results page then shows the same scope
+        startJudge('all', undefined, { tasks: [task] });
+      } });
     }
     showMenu(e.clientX, e.clientY, items);
   };
@@ -1034,7 +1062,7 @@ function renderTaskEditor(editor, i) {
     } }, '编译并使用');
     source.addEventListener('change', () => { build.classList.toggle('hidden', !source.checked); path.value = source.checked ? '' : t.specialJudge || ''; });
     const fromServer = async () => {
-      const value = await pickDataFile(source.checked ? '选择校验器源文件' : '选择校验器', source.checked ? /\.(?:cpp|cc|cxx|c)$/i : null);
+      const value = await pickDataFile(source.checked ? '选择校验器源文件' : '选择校验器', source.checked ? /\.(?:cpp|cc|cxx|c)$/i : null, taskDataFolder(t));
       if (!value) return;
       path.value = value; if (!source.checked) set('specialJudge', value);
     };
@@ -1042,7 +1070,8 @@ function renderTaskEditor(editor, i) {
       const file = h('input', { type: 'file', accept: source.checked ? '.cpp,.cc,.cxx,.c' : null });
       file.onchange = async () => {
         const chosen = file.files[0]; if (!chosen) return;
-        const target = 'checkers/' + chosen.name;
+        // next to the task's data, so that checkers of different tasks do not overwrite each other
+        const target = taskDataFolder(t) + '/' + chosen.name;
         if (S.dataFiles.includes(target) && !await confirmDlg(`替换 ${chosen.name}？`, '替换')) return;
         try {
           await api('PUT', cpath() + '/files/upload' + qs({ root: 'data', path: target }), undefined, { raw: chosen });
@@ -1061,8 +1090,9 @@ function renderTaskEditor(editor, i) {
   const typeSeg = h('div', { class: 'segmented' }, TASK_TYPES.map((label, v) => h('div', {
     class: t.taskType === v ? 'active' : '', onclick: () => { if (!disabled && t.taskType !== v) saveNow({ taskType: v }); },
   }, label)));
+  // Testlib checkers compiled here also run as Lemon checkers; the Testlib mode stays only for tasks still using it.
   const cmpSelect = h('select', { disabled, onchange: (e) => saveNow({ comparisonMode: +e.target.value }) },
-    COMPARISON_MODES.map((label, v) => h('option', { value: v, selected: t.comparisonMode === v }, label)));
+    COMPARISON_MODES.map((label, v) => (v === 5 && t.comparisonMode !== 5 ? null : h('option', { value: v, selected: t.comparisonMode === v }, label))));
 
   const isProgram = t.taskType !== 1;
   const isComm = t.taskType === 3 || t.taskType === 4;
@@ -1081,7 +1111,7 @@ function renderTaskEditor(editor, i) {
     field('比较方式', cmpSelect),
     t.comparisonMode === 2 ? field('diff 参数', text('diffArguments')) : null,
     t.comparisonMode === 3 ? field('精度（位）', num('realPrecision', { min: 0, max: 18 })) : null,
-    t.comparisonMode >= 4 ? field('校验器', checkerControl()) : null,
+    t.comparisonMode >= 4 ? field('校验器', checkerControl(), t.comparisonMode === 5 ? '旧方式；本服务器编译的校验器可直接改用“校验器”' : '支持本服务器编译的 Testlib 校验器') : null,
     t.taskType === 2 ? field('交互库', dataPath('interactor')) : null,
     t.taskType === 2 ? field('交互库文件名', text('interactorName')) : null,
     t.taskType === 2 ? field('Grader', dataPath('grader')) : null,
@@ -1340,7 +1370,7 @@ async function openTestCaseManager(taskIndex) {
   const task = S.contest.tasks[taskIndex];
   const clone = (x) => JSON.parse(JSON.stringify(x));
   let cases = clone(task.testCases);
-  const original = JSON.stringify(cases);
+  let original = JSON.stringify(cases);
   const undo = [], redo = [];
   let sel = { subs: new Set(), cases: new Set() };   // cases: "i:k"
   let anchor = null;
@@ -1530,26 +1560,26 @@ async function openTestCaseManager(taskIndex) {
     };
     const t0 = cases[targets[0]];
     const sc = mk('分值', t0.fullScore), tl = mk('时限 ms', t0.timeLimit), ml = mk('内存 MiB', t0.memoryLimit), tot = mk('总分平均分配', '');
+    const apply = () => {
+      if ([sc, tot].some(item => item.c.checked && (!Number.isInteger(+item.v.value) || +item.v.value < 0))
+        || [tl, ml].some(item => item.c.checked && (!Number.isInteger(+item.v.value) || +item.v.value <= 0))) {
+        toast('分值须为非负整数，时限和内存须为正整数', 'error'); return false;
+      }
+      commit(() => {
+        const total = +tot.v.value, n = targets.length, per = Math.floor(total / n);
+        targets.forEach((i, j) => {
+          if (sc.c.checked) cases[i].fullScore = +sc.v.value;
+          if (tl.c.checked) cases[i].timeLimit = +tl.v.value;
+          if (ml.c.checked) cases[i].memoryLimit = +ml.v.value;
+          if (tot.c.checked) cases[i].fullScore = per + (j < total - per * n ? 1 : 0);
+        });
+      });
+    };
     modal({
       title: selected.length ? `修改 ${targets.length} 个子任务` : `修改全部 ${targets.length} 个子任务`,
       body: h('div', { class: 'form-grid', style: { gridTemplateColumns: '110px 1fr' } }, sc.row, tl.row, ml.row, tot.row),
-      buttons: [{ label: '取消' }, {
-        label: '应用', primary: true, onClick: () => {
-          if ([sc, tot].some(item => item.c.checked && (!Number.isInteger(+item.v.value) || +item.v.value < 0))
-            || [tl, ml].some(item => item.c.checked && (!Number.isInteger(+item.v.value) || +item.v.value <= 0))) {
-            toast('分值须为非负整数，时限和内存须为正整数', 'error'); return false;
-          }
-          commit(() => {
-          const total = +tot.v.value, n = targets.length, per = Math.floor(total / n);
-          targets.forEach((i, j) => {
-            if (sc.c.checked) cases[i].fullScore = +sc.v.value;
-            if (tl.c.checked) cases[i].timeLimit = +tl.v.value;
-            if (ml.c.checked) cases[i].memoryLimit = +ml.v.value;
-            if (tot.c.checked) cases[i].fullScore = per + (j < total - per * n ? 1 : 0);
-          });
-          });
-        },
-      }],
+      buttons: [{ label: '取消' }, { label: '应用', primary: true, onClick: apply }],
+      onSaveKey: async (close) => { if (apply() !== false) { close(true); await save(); } },
     });
   };
 
@@ -1574,12 +1604,14 @@ async function openTestCaseManager(taskIndex) {
       const output = h('input', { class: 'mono', value: cases[i].outputFiles[k], list: 'datafiles', 'aria-label': '输出文件' });
       return { i, k, input, output };
     });
+    const apply = () => commit(() => {
+      for (const row of rows) { cases[row.i].inputFiles[row.k] = row.input.value; cases[row.i].outputFiles[row.k] = row.output.value; }
+    });
     modal({ title: keys.length === 1 ? '修改测试点' : `修改 ${keys.length} 个测试点`,
       body: h('table', { class: 'grid boxed' }, h('thead', null, h('tr', null, h('th', null, '测试点'), h('th', null, '输入文件'), h('th', null, '输出文件'))),
         h('tbody', null, rows.map(row => h('tr', null, h('td', null, `${row.i + 1}:${row.k + 1}`), h('td', null, row.input), h('td', null, row.output))))),
-      buttons: [{ label: '取消' }, { label: '应用', primary: true, onClick: () => commit(() => {
-        for (const row of rows) { cases[row.i].inputFiles[row.k] = row.input.value; cases[row.i].outputFiles[row.k] = row.output.value; }
-      }) }],
+      buttons: [{ label: '取消' }, { label: '应用', primary: true, onClick: apply }],
+      onSaveKey: async (close) => { apply(); close(true); await save(); },
     });
   };
   const clickSub = (i, e) => {
@@ -1795,6 +1827,8 @@ async function openTestCaseManager(taskIndex) {
     if (empty && !await confirmDlg('有数据路径为空，仍要保存吗？', '保存', false)) return false;
     try {
       await saveTask(taskIndex, { testCases: cases });
+      original = JSON.stringify(cases);
+      updateInfo();
       toast('测试点已保存');
       rerenderTasks();
       return true;
@@ -1833,6 +1867,7 @@ function remapResultTasks(remap) {
   S.resultSel = new Set([...S.resultSel].map(key).filter(Boolean));
   S.resultAnchor = key(S.resultAnchor);
   S.resultDrag = null;
+  if (S.judgeTasks) S.judgeTasks = new Set([...S.judgeTasks].map(remap).filter(index => index >= 0));
   if (S.resultSort.key.startsWith('task:')) {
     const index = remap(Number(S.resultSort.key.slice(5)));
     S.resultSort = index < 0 ? { key: 'total', direction: -1 } : { ...S.resultSort, key: 'task:' + index };
@@ -1916,6 +1951,14 @@ function resultGridSelection(list, onChange, onMenu) {
 }
 window.addEventListener('mouseup', () => { S.resultDrag = null; });
 
+// Ctrl+S on a contest page: save pending edits now (task and subtask settings are saved automatically).
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's' || !location.hash.startsWith('#/contest/')) return;
+  if ($('#modal-root').childElementCount) return; // dialogs handle it themselves
+  e.preventDefault();
+  LemonAutosave.flushAll().then(() => toast('已保存')).catch(fail);
+});
+
 // Keyboard shortcuts of the task tree and the results table (as in LemonLime), while that page is shown.
 document.addEventListener('keydown', (e) => {
   const v = S.pageKeys;
@@ -1924,9 +1967,76 @@ document.addEventListener('keydown', (e) => {
   v.keydown(e);
 });
 
-function renderResultsTab(page) {
+// The tasks the judge buttons of the results page work on (null: all of them).
+const judgeTaskList = () => S.contest.tasks.map((_, i) => i).filter(i => !S.judgeTasks || S.judgeTasks.has(i));
+const judgeScope = () => (S.judgeTasks && judgeTaskList().length < S.contest.tasks.length ? { tasks: judgeTaskList() } : {});
+
+function taskScopeLabel() {
+  const c = S.contest, list = judgeTaskList();
+  if (list.length === c.tasks.length) return '全部题目';
+  if (!list.length) return '未选题目';
+  const names = list.map(i => c.tasks[i].problemTitle || c.tasks[i].sourceFileName);
+  return names.join('、').length <= 16 ? names.join('、') : `${list.length} / ${c.tasks.length} 题`;
+}
+
+// Multi-select of the judged tasks, as a compact popover with check boxes.
+function taskScopePicker(onChange) {
+  const c = S.contest;
+  const label = h('span', { class: 'scope-label' }, taskScopeLabel());
+  const button = h('button', { class: 'scope-button', 'data-judge-scope': true, title: '评测哪些题目', disabled: !c.tasks.length }, label, h('span', { class: 'scope-caret' }));
+  const open = () => {
+    const boxes = [];
+    const allBox = h('input', { type: 'checkbox' });
+    const sync = () => {
+      const n = judgeTaskList().length;
+      allBox.checked = n === c.tasks.length;
+      allBox.indeterminate = n > 0 && n < c.tasks.length;
+      boxes.forEach((box, i) => { box.checked = !S.judgeTasks || S.judgeTasks.has(i); });
+      label.textContent = taskScopeLabel();
+      onChange();
+    };
+    const set = (next) => { S.judgeTasks = next.size === c.tasks.length ? null : next; sync(); };
+    allBox.addEventListener('change', () => set(new Set(allBox.checked ? c.tasks.map((_, i) => i) : [])));
+    const rows = c.tasks.map((task, i) => {
+      const box = h('input', { type: 'checkbox', 'data-judge-task': i });
+      box.addEventListener('change', () => {
+        const next = new Set(judgeTaskList());
+        if (box.checked) next.add(i); else next.delete(i);
+        set(next);
+      });
+      boxes.push(box);
+      return h('label', { class: 'scope-item' }, box, h('span', { class: 'grow' }, task.problemTitle || '(未命名)'), h('span', { class: 'muted mono' }, task.sourceFileName));
+    });
+    const popup = h('div', { class: 'menu scope-menu' },
+      h('label', { class: 'scope-item scope-all' }, allBox, h('span', { class: 'grow' }, '全部题目')),
+      h('div', { class: 'msep' }),
+      h('div', { class: 'scope-list' }, rows));
+    sync();
+    popupBelow(button, popup);
+  };
+  button.addEventListener('click', () => (S.menu && S.menu.classList.contains('scope-menu') ? closeMenu() : open()));
+  return button;
+}
+
+// Re-render the results tab in place: the scroll position stays and nothing flickers.
+function rerenderResults(options = {}) {
+  const page = $('.tabpage');
+  if (!page || !location.hash.includes('/results') || !S.contest) return;
+  // not in the middle of a drag selection: try again when it is done
+  if (S.resultDrag) { setTimeout(() => rerenderResults(options), 300); return; }
+  const wrap = page.querySelector('.results-wrap');
+  const top = wrap ? wrap.scrollTop : 0, left = wrap ? wrap.scrollLeft : 0;
+  const next = h('div');
+  renderResultsTab(next, options);
+  page.replaceChildren(...next.childNodes);
+  const fresh = page.querySelector('.results-wrap');
+  if (fresh) { fresh.scrollTop = top; fresh.scrollLeft = left; }
+}
+
+function renderResultsTab(page, options = {}) {
   const c = S.contest;
   if (S.resultSort.key.startsWith('task:') && +S.resultSort.key.slice(5) >= c.tasks.length) S.resultSort = { key: 'total', direction: -1 };
+  if (S.judgeTasks) S.judgeTasks = new Set([...S.judgeTasks].filter(i => i < c.tasks.length));
   const names = new Set(c.contestants.map(contestant => contestant.name));
   for (const key of S.resultSel) {
     const divider = key.lastIndexOf('|'), column = key.slice(divider + 1);
@@ -1959,16 +2069,25 @@ function renderResultsTab(page) {
   };
 
   const deleteSelected = () => deleteContestants(selectedList().map((x) => x.contestant));
-  const selBtn = h('button', { class: 'primary', disabled: !S.resultSel.size, onclick: () => startJudge('selected', selectedList()) }, '评测选中');
+  // every judge button works on the tasks chosen in the picker on their left
+  const judgeIn = (mode, items) => startJudge(mode, items, judgeScope());
+  const noScope = () => !judgeTaskList().length;
+  const selBtn = h('button', { class: 'primary', onclick: () => judgeIn('selected', selectedList()) }, '评测选中');
+  const allBtn = h('button', { onclick: () => judgeIn('all') }, '全部');
+  const unjudgedBtn = h('button', { onclick: () => judgeIn('unjudged') }, '未评测');
+  const stateBtn = h('button', { onclick: (e) => rejudgeByStateMenu(e.currentTarget) }, '按状态重测 ▾');
+  const updateJudgeButtons = () => {
+    selBtn.disabled = !S.resultSel.size || noScope();
+    allBtn.disabled = stateBtn.disabled = !c.contestants.length || noScope();
+    unjudgedBtn.disabled = noScope();
+  };
+  updateJudgeButtons();
   const delBtn = h('button', { class: 'danger', disabled: judging || !S.resultSel.size, onclick: deleteSelected }, '删除选中');
   page.appendChild(h('div', { class: 'toolbar' },
     h('button', { onclick: refreshContestants, disabled: judging }, '刷新选手'),
     h('div', { class: 'sep' }),
-    selBtn,
-    h('button', { disabled: !c.contestants.length, onclick: () => startJudge('all') }, '全部'),
-    h('button', { disabled: !c.contestants.length || !c.tasks.length, 'data-judge-tasks': true, onclick: () => chooseJudgeTasks() }, '评测题目…'),
-    h('button', { onclick: () => startJudge('unjudged') }, '未评测'),
-    h('button', { disabled: !c.contestants.length, onclick: (e) => rejudgeByStateMenu(e.currentTarget) }, '按状态重测 ▾'),
+    taskScopePicker(updateJudgeButtons),
+    selBtn, allBtn, unjudgedBtn, stateBtn,
     h('div', { class: 'sep' }),
     delBtn,
     h('button', { disabled: judging, onclick: cleanupFiles }, '整理文件'),
@@ -1980,11 +2099,17 @@ function renderResultsTab(page) {
   }
 
   const rank = computeRanks(c.contestants);
-  const list = LemonResultOrder.sort(c.contestants, S.resultSort.key, S.resultSort.direction);
+  let list = LemonResultOrder.sort(c.contestants, S.resultSort.key, S.resultSort.direction);
+  // While results come in, rows keep their places instead of jumping; new contestants go last.
+  if (options.keepOrder && S.resultRows && S.resultRows.contest === c.name) {
+    const at = new Map(S.resultRows.names.map((name, i) => [name, i]));
+    list = list.slice().sort((a, b) => (at.get(a.name) ?? Infinity) - (at.get(b.name) ?? Infinity));
+  }
+  S.resultRows = { contest: c.name, names: list.map(ct => ct.name) };
   const sortHeader = (label, key) => h('th', { 'aria-sort': S.resultSort.key === key ? S.resultSort.direction > 0 ? 'ascending' : 'descending' : 'none' },
     h('button', { class: 'result-sort', 'data-result-sort': key, onclick: () => {
       S.resultSort = { key, direction: S.resultSort.key === key ? -S.resultSort.direction : key === 'name' ? 1 : -1 };
-      page.replaceChildren(); renderResultsTab(page);
+      rerenderResults();
     } }, label, S.resultSort.key === key ? (S.resultSort.direction > 0 ? ' ↑' : ' ↓') : ''));
   const nf = hslOf(theme().nf), ce = hslOf(theme().ce);
   // ResultViewer::contextMenuEvent(): details (one contestant), judge, delete
@@ -1995,13 +2120,13 @@ function renderResultsTab(page) {
     showMenu(e.clientX, e.clientY, [
       one ? { label: h('b', null, '详情'), kbd: '双击', onClick: () => showDetail(one.contestant, cell >= 0 ? cell : undefined) } : null,
       cell >= 0 && c.tasks[cell].taskType !== 1 ? { label: '源程序', onClick: () => showSource(one.contestant, cell) } : null,
-      { label: sel.length > 1 ? `评测（${sel.length} 名选手）` : '评测', onClick: () => startJudge('selected', sel) },
+      { label: sel.length > 1 ? `评测（${sel.length} 名选手）` : '评测', disabled: noScope(), onClick: () => judgeIn('selected', sel) },
       'sep',
       { label: sel.length > 1 ? `删除 ${sel.length} 名选手` : '删除选手', kbd: 'Delete', danger: true, disabled: judging, onClick: deleteSelected },
     ]);
   };
   const bind = resultGridSelection(list, () => {
-    selBtn.disabled = !S.resultSel.size;
+    updateJudgeButtons();
     delBtn.disabled = judging || !S.resultSel.size;
   }, resultMenu);
   const table = h('table', { class: 'grid results' },
@@ -2039,7 +2164,7 @@ function renderResultsTab(page) {
     h('div', { class: 'legend' },
       h('span', null, h('i', { style: { background: nf } }), 'NS 未找到源程序'),
       h('span', null, h('i', { style: { background: ce } }), 'CE 等编译失败'),
-      h('span', { class: 'right' }, '单击选中／取消 · 拖动或 Shift 框选 · Ctrl 多选 · 双击看详情'))));
+      h('span', { class: 'right' }, '拖动或 Shift 框选 · Ctrl 多选 · 双击查看详情'))));
   S.pageKeys = {
     root: table,
     keydown: (e) => {
@@ -2051,10 +2176,11 @@ function renderResultsTab(page) {
 
 async function rejudgeByStateMenu(anchor) {
   let sum;
-  try { sum = await api('GET', cpath() + '/state-summary'); } catch (e) { return fail(e); }
+  const scope = judgeScope();
+  try { sum = await api('GET', cpath() + '/state-summary' + (scope.tasks ? qs({ tasks: scope.tasks.join(',') }) : '')); } catch (e) { return fail(e); }
   const item = (abbr, text, count, payload) => ({
-    label: h('span', null, h('b', { style: { display: 'inline-block', minWidth: '44px' } }, abbr), text),
-    count: count || 0, disabled: !count, onClick: () => startJudge('state', undefined, payload),
+    label: h('span', null, h('b', { style: { display: 'inline-block', minWidth: '52px' } }, abbr), text),
+    count: count || 0, disabled: !count, onClick: () => startJudge('state', undefined, { ...payload, ...scope }),
   });
   menuBelow(anchor, [
     { head: '编译' },
@@ -2126,22 +2252,24 @@ async function showDetail(name, focusTask) {
       if (det.compileMessage) sec.appendChild(h('pre', { class: 'compile-msg' }, det.compileMessage));
       return;
     }
-    const table = h('table', { class: 'grid boxed' },
-      h('tr', null, h('th', { class: 'center' }, '#'), h('th', null, '输入'), h('th', null, '结果'), h('th', null, '用时'), h('th', null, '内存'), h('th', { class: 'center' }, '得分')));
+    // Each subtask is one group (its # and score span the rows); every cell has its own borders.
+    const table = h('table', { class: 'grid detail-grid' },
+      h('tr', null, h('th', { class: 'center first' }, '#'), h('th', null, '输入'), h('th', null, '结果'), h('th', null, '用时'), h('th', null, '内存'), h('th', { class: 'center' }, '得分')));
     det.inputFiles.forEach((files, j) => {
       const scores = det.score[j] || [];
       const tc = t.testCases[j];
       const minv = Math.min(...scores.slice(0, files.length));
       const dep = scores.length !== files.length && scores.length ? scores[scores.length - 1] : null;
+      const span = 'center span' + (j === det.inputFiles.length - 1 ? ' last' : '');
       files.forEach((f, k) => {
         const msg = (det.message[j] || [])[k];
-        table.appendChild(h('tr', null,
-          k === 0 ? h('td', { rowspan: files.length, class: 'center' }, j + 1, dep !== null ? h('div', { class: 'muted small-text' }, dep >= 1000000 ? 'Pure' : dep < 0 ? 'Lost' : (dep / 10000).toFixed(1) + '%') : null) : null,
+        table.appendChild(h('tr', { class: k < files.length - 1 ? 'in-group' : null },
+          k === 0 ? h('td', { rowspan: files.length, class: span + ' first' }, j + 1, dep !== null ? h('div', { class: 'muted small-text' }, dep >= 1000000 ? 'Pure' : dep < 0 ? 'Lost' : (dep / 10000).toFixed(1) + '%') : null) : null,
           h('td', { class: 'mono' }, f),
           h('td', null, resultTag(det.result[j][k]), msg ? h('div', { class: 'muted small-text', style: { whiteSpace: 'pre-wrap', maxWidth: '340px', marginTop: '3px' } }, msg) : null),
           h('td', null, fmtTime(det.timeUsed[j][k])),
           h('td', null, fmtMem(det.memoryUsed[j][k])),
-          k === 0 ? h('td', { rowspan: files.length, class: 'center' }, h('b', null, isFinite(minv) ? minv : 0), h('span', { class: 'muted' }, ' / ' + (tc ? tc.fullScore : '?'))) : null));
+          k === 0 ? h('td', { rowspan: files.length, class: span }, h('b', null, isFinite(minv) ? minv : 0), h('span', { class: 'muted' }, ' / ' + (tc ? tc.fullScore : '?'))) : null));
       });
     });
     sec.appendChild(table);
@@ -2226,7 +2354,7 @@ const FS_SHORTCUTS = [
   ['Ctrl/Shift + 单击', '多选 / 连续选择'], ['Ctrl+A', '全选'], ['Esc', '取消选择'],
   ['Ctrl+C / Ctrl+X / Ctrl+V', '复制 / 剪切 / 粘贴（支持剪贴板文件上传）'], ['拖动到文件夹', '移动（按住 Ctrl 复制）'], ['M', '移动到…'],
   ['F2', '重命名'], ['Delete', '删除'], ['Ctrl+B', '用 Testlib for Lemons 编译选中的源文件'], ['Alt+N / Alt+Shift+N', '新建文件 / 文件夹'], ['Alt+U', '上传文件'],
-  ['Ctrl+F 或 /', '筛选当前文件夹'], ['右键', '更多操作'],
+  ['Ctrl+F 或 /', '查找（回车开始）'], ['右键', '更多操作'],
 ];
 
 async function renderFilesTab(page) {
@@ -2247,7 +2375,7 @@ async function renderFilesTab(page) {
     await renderFilesTab(page);
     loadDataFiles();
   };
-  const go = (path) => { F.path = path; F.expanded.add(path); F.selected = new Set(); F.anchor = -1; F.filter = ''; reload(); };
+  const go = (path) => { F.path = path; F.expanded.add(path); F.selected = new Set(); F.anchor = -1; F.filter = ''; F.filterDraft = undefined; reload(); };
   const full = (name) => joinPath(F.path, name);
   const isInternalDrag = (e) => [...e.dataTransfer.types].includes('application/x-lemonserver-paths');
 
@@ -2501,13 +2629,31 @@ async function renderFilesTab(page) {
     addCrumb(part, acc);
   }
 
+  // Searches when Enter or the button is pressed (not on every key), and keeps the focus in the box.
+  const applyFilter = (value, keepFocus = true) => {
+    F.filter = value.trim();
+    F.filterDraft = undefined;
+    F.focusFilter = keepFocus;
+    reload([...F.selected]);
+  };
   const filterInput = h('input', {
-    type: 'search', class: 'fs-filter', placeholder: '筛选', value: F.filter,
-    oninput: debounce((e) => { F.filter = e.target.value; reload([...F.selected]); }, 200),
-    onkeydown: (e) => { if (e.key === 'Escape') { e.stopPropagation(); e.target.value = ''; F.filter = ''; reload([...F.selected]); } if (e.key === 'ArrowDown') { e.preventDefault(); e.target.blur(); } },
+    type: 'search', class: 'fs-filter', placeholder: '查找文件', value: F.filterDraft ?? F.filter, 'aria-label': '查找文件',
+    // typed text and focus survive the page being refreshed (e.g. when judging starts or ends)
+    oninput: (e) => { F.filterDraft = e.target.value; },
+    onfocus: () => { F.filterFocused = true; },
+    onblur: (e) => { setTimeout(() => { if (e.target.isConnected) F.filterFocused = false; }); },
+    onkeydown: (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); applyFilter(e.target.value); }
+      else if (e.key === 'Escape') { e.stopPropagation(); e.target.value = ''; if (F.filter) applyFilter(''); else e.target.blur(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); e.target.blur(); }
+    },
+    // the clear button of the search box
+    onsearch: (e) => { if (!e.target.value && F.filter) applyFilter(''); },
   });
+  const filterBox = h('div', { class: 'fs-search' }, filterInput,
+    h('button', { class: 'small', 'data-fs-search': true, onclick: () => applyFilter(filterInput.value) }, '查找'));
   const toolbar = h('div', { class: 'toolbar' }, crumbs,
-    h('div', { class: 'right row' }, filterInput,
+    h('div', { class: 'right row' }, filterBox,
       h('button', { onclick: (e) => menuBelow(e.currentTarget, [
         { label: '上传文件…', kbd: 'Alt+U', onClick: () => uploadFiles() },
         { label: '上传文件夹…', onClick: () => uploadFolder() },
@@ -2538,7 +2684,7 @@ async function renderFilesTab(page) {
     const size = sel.reduce((a, e) => a + (e.dir ? 0 : e.size), 0);
     status.innerHTML = '';
     status.append(...[
-      h('span', null, `${visible.length} 项` + (F.filter ? `（已筛选，共 ${entries.length} 项）` : '')),
+      h('span', null, `${visible.length} 项` + (F.filter ? `（查找“${F.filter}”，共 ${entries.length} 项）` : '')),
       sel.length ? h('span', null, `已选 ${sel.length} 项` + (size ? ` · ${formatSize(size)}` : '')) : null,
       F.clip ? h('span', null, `剪贴板：${F.clip.paths.length} 项（${F.clip.mode === 'cut' ? '剪切' : '复制'}）`, h('a', { style: { marginLeft: '6px' }, onclick: () => paste() }, '粘贴到这里'), h('a', { style: { marginLeft: '6px' }, onclick: () => { F.clip = null; paint(); } }, '清除')) : null,
       h('span', { class: 'right' }, '右键查看更多操作 · ', h('a', { onclick: showHelp }, '快捷键'))].filter(Boolean));
@@ -2609,6 +2755,11 @@ async function renderFilesTab(page) {
   page.appendChild(root);
   paint();
   drawTree();
+  if (F.focusFilter || F.filterFocused) {
+    F.focusFilter = false;
+    filterInput.focus();
+    filterInput.setSelectionRange(filterInput.value.length, filterInput.value.length);
+  }
 
   // ---------- keyboard ----------
   S.fsView = {
@@ -2698,43 +2849,56 @@ async function chooseTemplate() {
 }
 
 // Compile a source file on the server with Testlib for Lemons, optionally using it as a task's checker.
-function pickDataFile(title, accept = null) {
-  return new Promise(resolve => {
-    let selected = null;
-    const list = h('select', { size: 12, style: { width: '100%', maxWidth: 'none' }, 'aria-label': '数据文件' });
-    const filter = h('input', { type: 'search', placeholder: '筛选文件', style: { width: '100%', maxWidth: 'none', marginBottom: '8px' }, oninput: draw });
-    function draw() {
-      const needle = filter.value.toLowerCase();
-      const matches = S.dataFiles.filter(file => (!accept || accept.test(file)) && file.toLowerCase().includes(needle));
-      list.replaceChildren(...(matches.length ? matches.map(file => h('option', { value: file }, file)) : [h('option', { value: '', disabled: true }, '暂无匹配文件')]));
-    }
-    const choose = () => { if (!list.value) return false; selected = list.value; };
-    const dialog = modal({ title, body: h('div', { style: { width: '500px', maxWidth: '80vw' } }, filter, list),
-      buttons: [{ label: '取消' }, { label: '选择', primary: true, onClick: choose }], onClose: () => resolve(selected) });
-    list.ondblclick = () => { if (choose() !== false) dialog.close(true); };
-    draw();
-  });
+// The folder of a task in data/: where its test data is, else its source file name.
+function taskDataFolder(task) {
+  const input = task.testCases?.[0]?.inputFiles?.[0] || '';
+  return input.includes('/') ? input.split('/')[0] : task.sourceFileName || 'checkers';
 }
 
-function chooseJudgeTasks(initial) {
-  const contest = S.contest, selected = new Set(initial || contest.tasks.map((_, i) => i));
-  const choices = contest.tasks.map((task, i) => h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: selected.has(i), 'data-judge-task': i,
-    onchange: event => { if (event.target.checked) selected.add(i); else selected.delete(i); dialog.foot.lastChild.disabled = !selected.size; } }), task.problemTitle));
-  const selectAll = checked => {
-    selected.clear();
-    choices.forEach((label, index) => { label.firstChild.checked = checked; if (checked) selected.add(index); });
-    dialog.foot.lastChild.disabled = !selected.size || !contest.contestants.length;
-  };
-  const dialog = modal({ title: '评测题目',
-    body: h('div', { class: 'judge-task-choices' }, h('div', { class: 'hint' }, `对当前 ${contest.contestants.length} 名选手评测所选题目`),
-      h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => selectAll(true) }, '全选'), h('button', { class: 'small', onclick: () => selectAll(false) }, '全不选')), choices),
-    buttons: [{ label: '取消' }, { label: '开始评测', primary: true, onClick: async () => {
-      if (!selected.size || S.contest.name !== contest.name) return false;
-      const tasks = [...selected].sort((a, b) => a - b);
-      return startJudge('selected', contest.contestants.map(contestant => ({ contestant: contestant.name, tasks })));
-    } }],
+// Choose a file of data/. Files in `folder` come first; type to filter, ↑↓ / Enter / double-click.
+function pickDataFile(title, accept = null, folder = '') {
+  return new Promise(resolve => {
+    let selected = null, current = '';
+    const list = h('div', { class: 'file-pick', role: 'listbox', tabindex: '0', 'aria-label': '数据文件' });
+    const filter = h('input', { type: 'search', class: 'file-pick-filter', placeholder: '筛选文件', oninput: () => draw() });
+    const inFolder = file => folder && file.startsWith(folder + '/');
+    function draw() {
+      const needle = filter.value.toLowerCase();
+      const matches = S.dataFiles.filter(file => (!accept || accept.test(file)) && file.toLowerCase().includes(needle))
+        .sort((a, b) => (inFolder(b) - inFolder(a)) || lessFileName(a, b));
+      if (!matches.includes(current)) current = matches[0] || '';
+      list.replaceChildren(...(matches.length ? matches.map(file => {
+        const cut = file.lastIndexOf('/');
+        return h('div', { class: 'file-pick-item' + (file === current ? ' selected' : ''), role: 'option', 'data-file': file, 'aria-selected': String(file === current),
+          onclick: () => { current = file; paint(); }, ondblclick: () => { current = file; if (choose() !== false) dialog.close(true); } },
+        h('span', { class: 'icon' }, fileIcon(file)), h('span', { class: 'name' }, file.slice(cut + 1)), cut > 0 ? h('span', { class: 'dir' }, file.slice(0, cut + 1)) : null);
+      }) : [h('div', { class: 'empty' }, '暂无匹配文件')]));
+    }
+    function paint() {
+      list.querySelectorAll('.file-pick-item').forEach(item => {
+        const on = item.dataset.file === current;
+        item.classList.toggle('selected', on);
+        item.setAttribute('aria-selected', String(on));
+        if (on) item.scrollIntoView({ block: 'nearest' });
+      });
+    }
+    const move = (step) => {
+      const files = [...list.querySelectorAll('.file-pick-item')].map(item => item.dataset.file);
+      if (!files.length) return;
+      current = files[Math.max(0, Math.min(files.length - 1, files.indexOf(current) + step))];
+      paint();
+    };
+    const keys = (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); move(e.key === 'ArrowDown' ? 1 : -1); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (choose() !== false) dialog.close(true); }
+    };
+    filter.addEventListener('keydown', keys);
+    list.addEventListener('keydown', keys);
+    const choose = () => { if (!current) return false; selected = current; };
+    const dialog = modal({ title, body: h('div', { class: 'file-pick-box' }, filter, list),
+      buttons: [{ label: '取消' }, { label: '选择', primary: true, onClick: choose }], onClose: () => resolve(selected) });
+    draw();
   });
-  dialog.foot.lastChild.disabled = !selected.size || !S.contest.contestants.length;
 }
 
 function compileDialog(path, onDone, options = {}) {
@@ -2787,13 +2951,12 @@ function compileDialog(path, onDone, options = {}) {
 
 function useAsChecker(dataPath) {
   const task = h('select', null, S.contest.tasks.map((t, i) => h('option', { value: i, selected: i === Math.max(0, S.sel.task) }, t.problemTitle)));
-  const mode = h('select', null, h('option', { value: 5 }, 'Testlib 校验器'), h('option', { value: 4 }, 'Lemon 校验器'));
   return h('div', { class: 'row', style: { marginTop: '12px' } },
-    h('span', null, '设为'), task, h('span', null, '的'), mode,
+    h('span', null, '设为'), task, h('span', null, '的校验器'),
     h('button', {
       class: 'small primary', onclick: async () => {
         try {
-          await saveTask(+task.value, { specialJudge: dataPath, comparisonMode: +mode.value });
+          await saveTask(+task.value, { specialJudge: dataPath, comparisonMode: 4 });
           toast(`已设为 ${S.contest.tasks[+task.value].problemTitle} 的校验器`);
         } catch (e) { fail(e); }
       },
@@ -2893,7 +3056,8 @@ async function startJudge(mode, items, extra = {}) {
     S.judge.status = st;
     S.judge.panelOpen = true;
     await reloadContest();
-    if (location.hash.includes('/contest/')) route(); else renderJudgePanel();
+    if (location.hash.includes('/results')) { renderBusyBar(); rerenderResults({ keepOrder: true }); renderJudgePanel(); }
+    else if (location.hash.includes('/contest/')) route(); else renderJudgePanel();
     startJudgePolling();
     return true;
   } catch (e) { fail(e); return false; }
@@ -2952,18 +3116,20 @@ async function pollJudge() {
     updateJudgeBadge();
     renderJudgeQueue();
     const cur = S.contest && location.hash.includes('/contest/') ? S.contest.name : null;
-    if (cur && st.contest === cur && st.events.some((e) => e.type === 'taskFinished' || e.type === 'finished') && location.hash.includes('/results')) {
+    const onResults = location.hash.includes('/results');
+    if (cur && st.contest === cur && onResults && st.events.some((e) => e.type === 'taskFinished' || e.type === 'finished')) {
+      if (st.events.some((e) => e.type === 'finished')) S.resultResort = true; // sort again once the run is over
       refreshResultsQuietly();
     }
     // the open contest became busy / editable again
     if (cur && contestBusyIn(st, cur) !== !!S.contest.busy) {
       await reloadContest();
-      route();
+      if (onResults) { renderBusyBar(); rerenderResults({ keepOrder: !S.resultResort }); } else route();
     }
     if (!st.judging) {
       stopJudgePolling();
       const fin = S.judge.log.filter((e) => e.type === 'finished').pop();
-      if (fin) toast(fin.stopped ? '评测已停止' : '评测完成');
+      if (fin) toast(fin.canceled ? '已取消评测' : fin.stopped ? '评测已停止' : '评测完成');
     }
   } catch (e) {
     if (e.status === 401) stopJudgePolling(); else console.error(e);
@@ -2973,14 +3139,10 @@ async function pollJudge() {
 const refreshResultsQuietly = debounce(async () => {
   try {
     await reloadContest();
-    const page = $('.tabpage');
-    if (page && location.hash.includes('/results')) {
-      const y = page.querySelector('.results-wrap')?.scrollTop;
-      page.innerHTML = '';
-      renderResultsTab(page);
-      const w = page.querySelector('.results-wrap');
-      if (w && y) w.scrollTop = y;
-    }
+    const resort = !!S.resultResort;
+    S.resultResort = false;
+    renderBusyBar();
+    rerenderResults({ keepOrder: !resort });
   } catch (e) { /* ignore */ }
 }, 800);
 
@@ -2997,10 +3159,9 @@ function updateJudgeBadge() {
 }
 
 function openJudgeDialog() {
-  // badge click: show the side panel (on the page of the contest being judged when not on a contest page)
+  // badge click: only show the side panel, wherever we are
   S.judge.panelOpen = true;
-  if (location.hash.includes('/contest/')) renderJudgePanel();
-  else if (S.judge.contest) go('#/contest/' + enc(S.judge.contest) + '/results');
+  renderJudgePanel();
 }
 
 function judgeLine(e) {
@@ -3018,29 +3179,36 @@ function judgeLine(e) {
     case 'dependence': return h('div', { class: 'l3 muted' }, `#${e.testCase + 1} 依赖 #${e.dependence}：`, e.status >= 1000000 ? 'Pure' : e.status < 0 ? 'Lost' : (e.status / 10000).toFixed(1) + '%');
     case 'compile': return e.state === 0 || e.state === undefined ? null : h('div', { class: 'l3' }, h('span', { class: 'muted' }, (e.contestant || '') + ' '), h('span', { class: 'error-text' }, COMPILE_ABBR[e.state] + ' · ' + COMPILE_STATE[e.state]));
     case 'stopping': return h('div', { class: 'l1 error-text' }, '正在停止…');
-    case 'finished': return h('div', { class: 'l1' }, e.stopped ? '已停止' : '完成', meta('  ' + (e.time || '')));
+    case 'canceling': return h('div', { class: 'l1 error-text' }, '正在取消…');
+    case 'finished': return h('div', { class: 'l1' }, e.canceled ? '已取消' : e.stopped ? '已停止' : '完成', meta('  ' + (e.time || '')));
     default: return null;
   }
 }
 
 function renderJudgePanel() {
-  const slot = $('#judge-panel-slot');
-  if (!slot) return;
+  // on a contest page the panel sits beside the tab; elsewhere it floats over the page
+  let slot = $('#judge-panel-slot');
+  const floating = !slot;
+  $('#judge-panel-float')?.remove();
+  if (floating) {
+    if (!S.judge.panelOpen || !$('#app .main')) return;
+    slot = h('div', { id: 'judge-panel-float' });
+    $('#app').appendChild(slot);
+  }
   slot.innerHTML = '';
   const st = S.judge.status;
   const hasWork = st && (st.running || (st.queue || []).length);
-  const show = S.judge.panelOpen && S.contest;
+  const show = S.judge.panelOpen;
   const toggle = $('#judge-panel-toggle');
   if (toggle) toggle.classList.toggle('hidden', show || (!S.judge.log.length && !hasWork));
   if (!show) return;
   const log = h('div', { class: 'judge-log', id: 'judge-log' });
   if (!S.judge.log.length) log.appendChild(h('div', { class: 'empty' }, '暂无评测日志'));
   for (const e of S.judge.log) { const l = judgeLine(e); if (l) log.appendChild(l); }
-  const stopBtn = h('button', {
-    class: 'danger', id: 'judge-stop',
-    onclick: async () => { try { await api('POST', cpath(S.judge.status.contest) + '/judge/stop'); } catch (e) { fail(e); } },
-  }, '停止评测');
-  slot.appendChild(h('div', { class: 'judge-panel' },
+  const halt = (action) => async () => { try { await api('POST', cpath(S.judge.status.contest) + '/judge/' + action); } catch (e) { fail(e); } };
+  const stopBtn = h('button', { class: 'danger', id: 'judge-stop', title: '正在评测的提交变为未评测', onclick: halt('stop') }, '停止评测');
+  const cancelBtn = h('button', { id: 'judge-cancel', title: '未评测完的提交保留上次的结果', onclick: halt('cancel') }, '取消评测');
+  slot.appendChild(h('div', { class: 'judge-panel' + (floating ? ' floating' : '') },
     h('div', { class: 'jp-head' }, h('b', null, '评测'), h('span', { class: 'muted small-text', id: 'judge-contest' }),
       h('button', { class: 'x', title: '收起', onclick: () => { S.judge.panelOpen = false; renderJudgePanel(); } }, '✕')),
     h('div', { class: 'jp-queue', id: 'judge-queue' }),
@@ -3048,7 +3216,7 @@ function renderJudgePanel() {
     h('div', { class: 'jp-progress' },
       h('div', { class: 'jp-progress-label' }, h('span', null, '总进度'), h('span', { id: 'judge-label' })),
       h('div', { class: 'progress' }, h('div', { id: 'judge-bar' }))),
-    h('div', { class: 'jp-foot' }, stopBtn,
+    h('div', { class: 'jp-foot' }, cancelBtn, stopBtn,
       h('button', { class: 'right', onclick: () => { S.judge.log = []; renderJudgePanel(); } }, '清空'))));
   log.scrollTop = log.scrollHeight;
   renderJudgeQueue();
@@ -3087,15 +3255,15 @@ const judgePercent = (st) => (st.progressMaximum > 0 ? Math.min(100, (st.progres
 
 function renderJudgeProgress() {
   const st = S.judge.status;
-  const bar = $('#judge-bar'), label = $('#judge-label'), stop = $('#judge-stop'), contest = $('#judge-contest');
-  if (!bar || !st) { if (stop) stop.disabled = true; return; }
+  const bar = $('#judge-bar'), label = $('#judge-label'), stop = $('#judge-stop'), cancel = $('#judge-cancel'), contest = $('#judge-contest');
+  if (!bar || !st) { if (stop) stop.disabled = true; if (cancel) cancel.disabled = true; return; }
   const pct = judgePercent(st);
   bar.style.width = (st.running ? pct : st.finished ? 100 : 0) + '%';
   if (contest) contest.textContent = st.running ? st.contest : '';
   // during the contest time the server only gives the overall progress, not the number of submissions
   const count = st.running && st.tasksTotal !== undefined ? `${st.tasksDone} / ${st.tasksTotal} 项 · ` : '';
   label.textContent = st.running ? count + pct.toFixed(0) + '%' : st.finished ? '已结束' : '—';
-  stop.disabled = !st.running || st.stopRequested;
+  stop.disabled = cancel.disabled = !st.running || st.stopRequested;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -3367,13 +3535,15 @@ function renderApiDoc() {
     ['GET · DELETE ' + C + '/contestants/{who}', '详细结果 / 删除（?deleteFiles=1）'],
     ['GET ' + C + '/contestants/{who}/source/{i}', '源程序'],
     ['POST ' + C + '/cleanup', '{"backup":true} 整理文件'],
-    ['POST ' + C + '/judge', '{"mode":"all|unjudged|grey|magenta|state|selected","items":[{"contestant","tasks":[0]}],"refresh"?:true}，加入评测队列，返回 job（position 0 为立即开始）'],
+    ['POST ' + C + '/judge', '{"mode":"all|unjudged|grey|magenta|state|selected","items":[{"contestant","tasks":[0]}],"tasks"?:[0,2],"refresh"?:true}，加入评测队列，返回 job（position 0 为立即开始）；tasks 限定只评测这些题'],
     ['DELETE ' + C + '/judge', '该比赛的任务全部出队（正在评测的会停止）；评测或排队中的比赛不能修改'],
     ['GET /api/judge-queue', '评测队列 {"running","queue"}；所有比赛共用一个队列，依次评测'],
     ['DELETE /api/judge-queue/{id}', '移出队列（正在评测则停止）'],
-    ['源程序变更', '通过文件接口修改 source/ 下的提交后，对应格子变为未评测'],
+    ['源程序变更', '通过文件接口修改 source/ 下的提交后，对应格子变为未评测；内容相同的上传不影响结果（返回 unchanged）'],
     ['GET /api/judge/status?since=N', '当前评测的进度、队列与 id > N 的事件'],
-    ['POST ' + C + '/judge/stop', '停止该比赛正在进行的评测'],
+    ['GET ' + C + '/state-summary?tasks=0,2', '各编译状态／测试点结果的格子数，tasks 可选'],
+    ['POST ' + C + '/judge/stop', '停止评测：正在评测的格子变为未评测'],
+    ['POST ' + C + '/judge/cancel', '取消评测：未评测完的格子保留上次的结果'],
     ['GET ' + C + '/export?format=html|htm|csv', '导出结果；&save=1 保存到比赛文件夹'],
     ['GET ' + C + '/statistics', '统计 HTML'],
     ['文件（root = data | source | contest）', ''],

@@ -62,12 +62,15 @@ class Contest : public QObject {
 	void judge(const QVector<std::pair<Contestant *, int>> &);
 	void clearPath(const QString &);
 	JudgingController *controller{};
+	bool judgingCanceled = false;
 
   public slots:
 	void judge(const QList<std::pair<QString, QVector<int>>> &);
 	void judgeAll();
 	// void judgeFinished();
 	void stopJudgingSlot();
+	// Stop judging, keeping the previous results of everything not judged to the end.
+	void cancelJudgingSlot();
 
   signals:
 	void taskAddedForContestant();
