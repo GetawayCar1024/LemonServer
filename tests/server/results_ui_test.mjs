@@ -16,10 +16,12 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   for (let i = 0; i < 1200; i++) { if (!(await api('GET', '/api/judge/status')).judging) break; await delay(50); }
   await api('PUT', base + '/files/upload?' + new URLSearchParams({ root: 'source', path: 'dave/a.cpp' }), undefined, source(1));
   await api('POST', base + '/refresh');
+  const totals = async () => Object.fromEntries((await api('GET', base)).contestants.map(ct => [ct.name, ct.totalScore]));
+  assert.deepEqual(await totals(), { alice: 100, bob: 200, carol: 0, dave: -1 }, 'server results before opening the page');
   await open('result-test', 'results');
   await wait('!!document.querySelector("[data-result-sort=total]")');
   const order = () => js(`[...document.querySelectorAll('tr[data-contestant]')].map(row=>row.dataset.contestant)`);
-  assert.deepEqual(await order(), ['bob', 'alice', 'carol', 'dave']);
+  assert.deepEqual(await order(), ['bob', 'alice', 'carol', 'dave'], 'page totals: ' + JSON.stringify(await js('S.contest.contestants.map(ct=>[ct.name,ct.totalScore,ct.totalUsedTime])')) + ' server: ' + JSON.stringify(await totals()));
   await js(`document.querySelector('[data-result-sort="task:1"]').click()`);
   assert.deepEqual(await order(), ['bob', 'alice', 'carol', 'dave']);
   await js(`document.querySelector('[data-result-sort="task:1"]').click()`);
