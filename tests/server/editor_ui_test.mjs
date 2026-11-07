@@ -127,6 +127,9 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   await api('PUT', contest + '/tasks/2', { specialJudge: failing.executable.replace(/^data\//, '') });
   assert.equal((await judgeAlice()).result[0][0], 8, 'FAIL is an invalid checker, as in Testlib mode');
   console.log('PASS compiled Testlib checkers run in Lemon mode with Testlib scoring');
+  // the page may still show the contest as busy from the API-driven judging until its next poll
+  await js('reloadContest().then(()=>route())');
+  await wait(`[...document.querySelectorAll('.editor button')].some(button=>button.textContent==='导入 Hydro 配置'&&!button.disabled)`);
 
   const openImport = async () => {
     await js(`[...document.querySelectorAll('.editor button')].find(button=>button.textContent==='导入 Hydro 配置').click()`);

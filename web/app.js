@@ -3092,7 +3092,9 @@ function startJudgePolling() {
 async function checkJudgeStatus() {
   try {
     const list = await api('GET', '/api/contests', undefined, { noLoginRedirect: true });
-    if ((list.judging || (list.queue || []).length) && !S.judge.timer) startJudgePolling();
+    // also when the open contest is still shown as busy: the judging may have ended in the meantime
+    const shownBusy = !!S.contest?.busy && location.hash.includes('/contest/');
+    if ((list.judging || (list.queue || []).length || shownBusy) && !S.judge.timer) startJudgePolling();
   } catch (e) { /* ignore */ }
 }
 
