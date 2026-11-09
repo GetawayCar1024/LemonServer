@@ -113,6 +113,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/server/files_ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/access_test.mjs "$env:PKG\LemonServer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/access_ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/interaction_ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/server/judge_queue_test.mjs "$env:PKG\LemonServer.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -182,6 +188,9 @@ jobs:
           node tests/server/editor_ui_test.mjs "$PWD/build/LemonServer" --embedded
           node tests/server/results_ui_test.mjs "$PWD/build/LemonServer" --embedded
           node tests/server/files_ui_test.mjs "$PWD/build/LemonServer" --embedded
+          node tests/server/access_test.mjs "$PWD/build/LemonServer"
+          node tests/server/access_ui_test.mjs "$PWD/build/LemonServer" --embedded
+          node tests/server/interaction_ui_test.mjs "$PWD/build/LemonServer" --embedded
           node tests/server/judge_queue_test.mjs "$PWD/build/LemonServer"
 
       - name: Build .deb

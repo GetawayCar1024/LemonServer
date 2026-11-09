@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20.0)
 project(LemonServer LANGUAGES CXX)
 
 # Version of the LemonServer fork; LEMON_VERSION_STRING (makespec/VERSION) stays the upstream LemonLime version.
-set(LEMONSERVER_VERSION "0.1.10")
+set(LEMONSERVER_VERSION "0.1.11")
 
 ## Add paths to check for cmake modules:
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

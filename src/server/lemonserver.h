@@ -42,6 +42,7 @@ class LemonServer : public QObject {
 	void setupImportRoutes();
 	void setupTestlibRoutes();
 	void setupContestRoutes();
+	void setupPublicRoutes();
 	void setupFileRoutes();
 
 	Access access(const QHttpServerRequest &req) const;
@@ -53,6 +54,7 @@ class LemonServer : public QObject {
 	std::optional<QHttpServerResponse> notWhileJudging() const;
 	// The current contest is being judged or waiting in the judging queue: it can be viewed, not changed.
 	std::optional<QHttpServerResponse> notWhileBusy() const;
+	std::optional<QHttpServerResponse> notWhileArchived() const;
 	// The .cdf and lemonserver.json are managed by the server, not through the file system API.
 	bool isReservedFile(const QString &abs) const;
 	// abs was written / removed: if it is a submission under source/, mark the results outdated.
@@ -60,6 +62,9 @@ class LemonServer : public QObject {
 
 	QJsonObject contestJson(Contest *contest) const;
 	QJsonObject contestantJson(Contest *contest, Contestant *ct) const;
+	QJsonObject publicContestantJson(Contest *contest, Contestant *ct, bool details = false) const;
+	QJsonObject publicContestJson(Contest *contest) const;
+	QJsonObject publicJudgeStatus(const QString &name) const;
 	// Files submitted by a contestant for a task (source files, or answer files of an answers-only task).
 	QStringList submissionFiles(Contest *contest, Contestant *ct, int taskIndex) const;
 	void serveStatic(const QHttpServerRequest &req, QHttpServerResponder &responder) const;

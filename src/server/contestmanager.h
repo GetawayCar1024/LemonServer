@@ -81,6 +81,10 @@ class ContestManager : public QObject {
 	QString downZip() const;
 	bool setDownZip(const QString &relativePath, QString *error);
 	QJsonObject propertiesJson() const;
+	bool isArchived(const QString &name) const;
+	bool isPublic(const QString &name) const;
+	bool setArchived(bool archived, QString *error);
+	bool setPublic(bool visible, QString *error);
 
 	// ---------------- judging queue ----------------
 	// Queue a judging request of the current contest ({"mode", "items", "compileStates", "resultStates",
@@ -145,6 +149,7 @@ class ContestManager : public QObject {
 	void runJudge(const QList<std::pair<QString, QVector<int>>> &list);
 	QJsonObject jobJson(const Job &job, int position) const;
 	static QJsonObject readProperties(const QString &dir);
+	static bool saveProperties(const QString &dir, const QJsonObject &properties, QString *error);
 	bool writeProperties(QString *error);
 	const QJsonObject &props() const;
 

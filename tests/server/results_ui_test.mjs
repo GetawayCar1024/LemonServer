@@ -22,10 +22,13 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   await wait('!!document.querySelector("[data-result-sort=total]")');
   const order = () => js(`[...document.querySelectorAll('tr[data-contestant]')].map(row=>row.dataset.contestant)`);
   assert.deepEqual(await order(), ['bob', 'alice', 'carol', 'dave'], 'page totals: ' + JSON.stringify(await js('S.contest.contestants.map(ct=>[ct.name,ct.totalScore,ct.totalUsedTime])')) + ' server: ' + JSON.stringify(await totals()));
+  // Equal scores use measured total CPU time before name order; do not assume both runs took 0 ms.
+  const tied = (await api('GET', base)).contestants.filter(ct => ct.name === 'alice' || ct.name === 'carol')
+    .sort((a, b) => a.totalUsedTime - b.totalUsedTime || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(ct => ct.name);
   await js(`document.querySelector('[data-result-sort="task:1"]').click()`);
-  assert.deepEqual(await order(), ['bob', 'alice', 'carol', 'dave']);
+  assert.deepEqual(await order(), ['bob', ...tied, 'dave']);
   await js(`document.querySelector('[data-result-sort="task:1"]').click()`);
-  assert.deepEqual(await order(), ['alice', 'carol', 'bob', 'dave']);
+  assert.deepEqual(await order(), [...tied, 'bob', 'dave']);
   await js(`document.querySelector('[data-result-sort=name]').click()`);
   assert.deepEqual(await order(), ['alice', 'bob', 'carol', 'dave']);
   await click('[data-result-key="alice|0"]');

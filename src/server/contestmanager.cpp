@@ -150,6 +150,8 @@ QJsonArray ContestManager::listContests() const {
 		                 {"judging", judging && running.contest == name},
 		                 {"queuedJobs", queuedJobs(name)},
 		                 {"busy", isBusy(name)},
+		                 {"public", props["public"].toBool(false)},
+		                 {"archived", props["archived"].toBool(false)},
 		                 {"downZip", props["downZip"].toString()}};
 		QFile f(cdf);
 		if (f.open(QFile::ReadOnly)) {
@@ -189,6 +191,11 @@ bool ContestManager::createContest(const QString &name, const QString &title, QS
 		*error = tr("Cannot make contest path");
 		return false;
 	}
+	auto properties = readProperties(dir);
+	properties["public"] = false;
+	properties["archived"] = false;
+	if (! saveProperties(dir, properties, error))
+		return false;
 	if (loaded.contains(name))
 		unload(name);
 	auto *c = new Contest(this);
@@ -211,6 +218,10 @@ bool ContestManager::deleteContest(const QString &requested, QString *error) {
 	}
 	if (isBusy(name)) {
 		*error = tr("This contest is being judged or waiting to be judged");
+		return false;
+	}
+	if (isArchived(name)) {
+		*error = tr("This contest is archived. Unarchive it before making changes.");
 		return false;
 	}
 	if (loaded.contains(name)) {
@@ -298,13 +309,11 @@ bool ContestManager::cloneContest(const QString &requestedFrom, const QString &t
 		return fail(tr("Cannot write file %1").arg(to + ".cdf"));
 	// LemonServer's properties: keep down.zip (if it was copied)
 	const QString down = src.properties["downZip"].toString();
-	if (! down.isEmpty() && QFileInfo(dst.filePath(down)).isFile()) {
-		QSaveFile props(dst.filePath(kPropertiesFile));
-		if (props.open(QFile::WriteOnly)) {
-			props.write(QJsonDocument(QJsonObject{{"downZip", down}}).toJson(QJsonDocument::Indented));
-			props.commit();
-		}
-	}
+	QJsonObject properties{{"public", false}, {"archived", false}};
+	if (! down.isEmpty() && QFileInfo(dst.filePath(down)).isFile())
+		properties["downZip"] = down;
+	if (! saveProperties(dstDir, properties, error))
+		return fail(*error);
 	LOG("Cloned contest", from, "to", to, withSubmissions ? "with submissions" : "without submissions");
 	return true;
 }
@@ -353,8 +362,18 @@ bool ContestManager::importContest(const QString &stagingDir, QString name, bool
 		*error = tr("Invalid contest name");
 		return false;
 	}
+	// Sanitize in staging, before the imported CDF can become visible in the contest root.
+	auto properties = readProperties(source);
+	properties["public"] = false;
+	properties["archived"] = false;
+	if (! saveProperties(source, properties, error))
+		return false;
 	const QString dest = contestDir(name);
 	if (QFileInfo::exists(dest)) {
+		if (isArchived(name)) {
+			*error = tr("This contest is archived. Unarchive it before making changes.");
+			return false;
+		}
 		if (! overwrite) {
 			*error = tr("Contest %1 already exists").arg(name);
 			return false;
@@ -547,15 +566,51 @@ QJsonObject ContestManager::readProperties(const QString &dir) {
 	return props;
 }
 
-bool ContestManager::writeProperties(QString *error) {
-	QSaveFile file(currentPropertiesPath());
+bool ContestManager::saveProperties(const QString &dir, const QJsonObject &properties, QString *error) {
+	QSaveFile file(QDir(dir).absoluteFilePath(kPropertiesFile));
 	if (file.open(QFile::WriteOnly)) {
-		file.write(QJsonDocument(props()).toJson(QJsonDocument::Indented));
-		if (file.commit())
+		const auto bytes = QJsonDocument(properties).toJson(QJsonDocument::Indented);
+		if (file.write(bytes) == bytes.size() && file.commit())
 			return true;
 	}
-	*error = tr("Cannot write file %1").arg(kPropertiesFile);
+	if (error) *error = tr("Cannot write file %1").arg(kPropertiesFile);
 	return false;
+}
+
+bool ContestManager::writeProperties(QString *error) { return saveProperties(currentDir(), props(), error); }
+
+bool ContestManager::isArchived(const QString &requested) const {
+	if (! isValidContestName(requested)) return false;
+	const auto name = canonicalName(requested);
+	const auto properties = loaded.contains(name) ? loaded.value(name).properties : readProperties(contestDir(name));
+	return properties["archived"].toBool(false);
+}
+
+bool ContestManager::isPublic(const QString &requested) const {
+	if (! isValidContestName(requested)) return false;
+	const auto name = canonicalName(requested);
+	const auto properties = loaded.contains(name) ? loaded.value(name).properties : readProperties(contestDir(name));
+	return properties["public"].toBool(false);
+}
+
+bool ContestManager::setArchived(bool archived, QString *error) {
+	if (! contest) { *error = tr("No contest yet"); return false; }
+	if (isBusy(contestName)) { *error = tr("This contest is being judged or waiting to be judged"); return false; }
+	if (archived == isArchived(contestName)) return true;
+	if (archived && ! save(error)) return false;
+	auto next = props(); next["archived"] = archived;
+	if (! saveProperties(currentDir(), next, error)) return false;
+	loaded[contestName].properties = next;
+	return true;
+}
+
+bool ContestManager::setPublic(bool visible, QString *error) {
+	if (! contest) { *error = tr("No contest yet"); return false; }
+	if (isArchived(contestName)) { *error = tr("This contest is archived. Unarchive it before making changes."); return false; }
+	auto next = props(); next["public"] = visible;
+	if (! saveProperties(currentDir(), next, error)) return false;
+	loaded[contestName].properties = next;
+	return true;
 }
 
 QString ContestManager::downZip() const { return props()["downZip"].toString(); }
@@ -592,7 +647,7 @@ QJsonObject ContestManager::propertiesJson() const {
 		                   {"size", double(fi.isFile() ? fi.size() : 0)},
 		                   {"modified", fi.isFile() ? fi.lastModified().toString("yyyy-MM-dd hh:mm:ss") : QString()}};
 	}
-	return {{"downZip", down}};
+	return {{"downZip", down}, {"public", isPublic(contestName)}, {"archived", isArchived(contestName)}};
 }
 
 bool ContestManager::save(QString *error) { return contest && saveContest(contestName, error); }
@@ -602,6 +657,8 @@ bool ContestManager::saveContest(const QString &name, QString *error) {
 	const auto it = loaded.constFind(name);
 	if (it == loaded.cend())
 		return false;
+	if (it->properties["archived"].toBool(false))
+		return true; // Reads, eviction and shutdown must not rewrite an archived CDF.
 	QSaveFile file(QDir(contestDir(name)).absoluteFilePath(it->cdfFile));
 	if (! file.open(QFile::WriteOnly)) {
 		if (error)
@@ -1063,6 +1120,10 @@ bool ContestManager::enqueueJudge(const QJsonObject &request, QJsonObject *job, 
 		*error = tr("No contest yet");
 		return false;
 	}
+	if (isArchived(contestName)) {
+		*error = tr("This contest is archived. Unarchive it before making changes.");
+		return false;
+	}
 	const bool busy = isBusy(contestName);
 	// "refresh": pick up new contestant folders first. A busy contest is refreshed when its job starts
 	// (refreshing removes contestants, which must not happen while they are being judged).
@@ -1186,6 +1247,10 @@ void ContestManager::scheduleNext() {
 void ContestManager::startNext() {
 	while (! judging && ! queue.isEmpty()) {
 		const Job job = queue.takeFirst();
+		if (isArchived(job.contest)) {
+			pushEvent({{"type", "skipped"}, {"job", double(job.id)}, {"contest", job.contest}, {"error", tr("This contest is archived.")}});
+			continue;
+		}
 		QString error;
 		Contest *c = nullptr;
 		if (loaded.contains(job.contest)) {

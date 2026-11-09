@@ -71,7 +71,7 @@ function setThemeMode(mode) {
   applyTheme();
   for (const b of document.querySelectorAll('.theme-switch')) b.textContent = THEME_LABELS[mode];
   // score colors are computed in JS, so redraw pages that show them
-  if (S.settings && $('.topbar')) route();
+  if (S.status && $('.topbar')) route();
 }
 const THEME_LABELS = { auto: '◐ 跟随系统', light: '☀︎ 浅色', dark: '☾ 深色' };
 function themeButton() {
@@ -108,6 +108,8 @@ function h(tag, attrs, ...children) {
 const $ = (sel, root = document) => root.querySelector(sel);
 const enc = encodeURIComponent;
 const cpath = (name) => '/api/contests/' + enc(name || S.contest.name);
+const publicPath = (name) => '/api/public/contests/' + enc(name || S.contest.name);
+const isAdmin = () => !!S.status?.authenticated;
 const fmtMem = (b) => (b < 0 ? '—' : (b / 1024 / 1024).toFixed(2) + ' MiB');
 const fmtTime = (t) => (t < 0 ? '—' : t + ' ms');
 const qs = (o) => '?' + Object.entries(o).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
@@ -119,8 +121,9 @@ class ApiError extends Error {
 }
 
 async function api(method, path, body, opt = {}) {
+  const session = S.session;
   const headers = {};
-  if (S.session) headers.Authorization = 'Bearer ' + S.session;
+  if (session) headers.Authorization = 'Bearer ' + session;
   let payload;
   if (opt.raw !== undefined) {
     payload = opt.raw;
@@ -139,15 +142,16 @@ async function api(method, path, body, opt = {}) {
       try {
         const j = await res.json();
         msg = j.busy ? '比赛正在评测或排队，不能修改' : (j.error || msg);
+        if (j.archived || j.error === 'This contest is archived. Unarchive it before making changes.') msg = '比赛已存档，请先取消存档。';
+        if (j.error === 'Contest is not public or does not exist') msg = '比赛未公开或不存在。';
         const badName = String(j.error || '').match(/(sourceFileName|inputFileName|outputFileName):/);
         if (badName) msg = ({ sourceFileName: '源程序名', inputFileName: '输入文件名', outputFileName: '输出文件名' })[badName[1]] + '须使用英文字母、数字、点、下划线或连字符，不能含路径或系统保留名。题目显示名仍可用中文。';
         if (j.error === 'Input and output file names must be different.') msg = '输入和输出文件名不能相同。';
       } catch (e) { /* ignore */ }
     }
-    if (res.status === 401 && !opt.noLoginRedirect) {
-      S.session = '';
-      localStorage.removeItem('lemonserver.session');
-      renderLogin();
+    if (res.status === 401 && !opt.noLoginRedirect && S.session === session) {
+      resetSession();
+      route();
     }
     throw new ApiError(res.status, msg);
   }
@@ -168,6 +172,7 @@ const fail = (e) => toast(e.message || String(e), 'error');
 // onSaveKey(close): Ctrl+S while this is the topmost dialog.
 function modal({ title, body, buttons = [], onClose, closable = true, wide, beforeClose, onSaveKey }) {
   const root = $('#modal-root');
+  const previousFocus = document.activeElement;
   const back = h('div', { class: 'modal-back' });
   let closed = false;
   const saveKey = (e) => {
@@ -182,6 +187,7 @@ function modal({ title, body, buttons = [], onClose, closable = true, wide, befo
     closed = true;
     document.removeEventListener('keydown', saveKey, true);
     back.remove();
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
     if (onClose) onClose();
   };
   back._close = closable ? () => close() : null;
@@ -207,8 +213,9 @@ function modal({ title, body, buttons = [], onClose, closable = true, wide, befo
   back.appendChild(m);
   if (closable) back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
   root.appendChild(back);
-  const first = m.querySelector('.modal-body input:not([type=checkbox]):not([type=radio]),.modal-body textarea');
-  if (first) setTimeout(() => first.focus(), 30);
+  const first = m.querySelector('.modal-body input:not([type=checkbox]):not([type=radio]),.modal-body textarea')
+    || foot.querySelector('button.primary:not(:disabled)') || [...foot.querySelectorAll('button:not(:disabled)')].at(-1) || m.querySelector('button');
+  if (first) first.focus({ preventScroll: true });
   return { close, el: m, foot };
 }
 
@@ -346,21 +353,24 @@ const resultTag = (state) => {
 // Boot / routing
 // ------------------------------------------------------------------------------------------------
 async function boot() {
+  const session = S.session;
   try {
-    S.status = await api('GET', '/api/auth/status', undefined, { noLoginRedirect: true });
+    const status = await api('GET', '/api/auth/status', undefined, { noLoginRedirect: true });
+    if (S.session !== session) return;
+    S.status = status;
   } catch (e) {
     document.body.textContent = '无法连接服务器：' + e.message;
     return;
   }
-  if (!S.status.authenticated) return renderLogin();
-  if (S.status.setupRequired) return renderSetup();
+  if (!isAdmin()) resetSession();
+  if (isAdmin() && S.status.setupRequired) return renderSetup();
   route();
-  setInterval(() => { if (S.session && !S.judge.timer && !document.hidden) checkJudgeStatus(); }, 5000);
+  S.statusTimer ||= setInterval(() => { if (isAdmin() && S.session && !S.judge.timer && !document.hidden) checkJudgeStatus(); }, 5000);
 }
 
 window.addEventListener('hashchange', () => {
   for (const m of [...document.querySelectorAll('#modal-root > .modal-back')]) if (m._close) m._close();
-  if (S.session) route();
+  route();
 });
 window.addEventListener('beforeunload', (event) => {
   if (LemonAutosave.pending) { event.preventDefault(); event.returnValue = ''; }
@@ -382,24 +392,34 @@ async function go(hash) {
 
 async function route() {
   try { await LemonAutosave.flushAll(); } catch (error) { fail(error); return; }
+  stopPublicPolling();
   const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
-  S.section = parts[0] === 'settings' || parts[0] === 'api' ? parts[0] : 'contests';
+  S.section = ['settings', 'api', 'archives'].includes(parts[0]) ? parts[0] : 'contests';
   try {
+    if (parts[0] === 'login') return renderLogin();
+    if (!isAdmin()) {
+      if (parts[0] === 'contest' && parts[1]) return await renderPublicContest(parts[1]);
+      if (parts[0] === 'settings' || parts[0] === 'api') return renderLogin();
+      return await renderContestList(parts[0] === 'archives');
+    }
     if (!S.settings) await loadSettings();
+    if (!isAdmin()) return route();
     if (parts[0] === 'contest' && parts[1]) return await renderContest(parts[1], parts[2] || 'tasks');
     if (parts[0] === 'settings') return await renderSettings(parts[1] || 'general');
     if (parts[0] === 'api') return renderApiDoc();
-    return await renderContestList();
+    return await renderContestList(parts[0] === 'archives');
   } catch (e) {
     if (e.status !== 401) {
       fail(e);
-      if (parts[0] === 'contest') go('#/contests');
+      if (parts[0] === 'contest') { S.contest = null; $('#app').replaceChildren(); go('#/contests'); }
     }
   }
 }
 
 async function loadSettings() {
-  [S.settings, S.compilers] = await Promise.all([api('GET', '/api/settings'), api('GET', '/api/compilers')]);
+  const session = S.session;
+  const data = await Promise.all([api('GET', '/api/settings'), api('GET', '/api/compilers')]);
+  if (isAdmin() && S.session === session) [S.settings, S.compilers] = data;
 }
 
 function shell(content, title) {
@@ -409,11 +429,11 @@ function shell(content, title) {
     h('div', { class: 'brand', onclick: () => go('#/contests') }, h('img', { src: 'logo.png', alt: '' }), 'LemonServer'),
     title ? h('div', { class: 'title' }, title) : null,
     h('div', { class: 'spacer' }),
-    h('span', { class: 'judging-badge hidden', id: 'judge-badge', onclick: () => openJudgeDialog() }),
-    [['contests', '比赛', '#/contests'], ['settings', '设置', '#/settings/general'], ['api', 'API', '#/api']].map(([k, label, hash]) =>
+    isAdmin() ? h('span', { class: 'judging-badge hidden', id: 'judge-badge', onclick: () => openJudgeDialog() }) : null,
+    [['contests', '比赛', '#/contests'], ['archives', '存档', '#/archives'], ...(isAdmin() ? [['settings', '设置', '#/settings/general'], ['api', 'API', '#/api']] : [])].map(([k, label, hash]) =>
       h('button', { class: S.section === k ? 'active' : '', onclick: () => go(hash) }, label)),
     themeButton(),
-    h('button', { onclick: logout }, '退出')));
+    h('button', { onclick: () => isAdmin() ? logout() : go('#/login') }, isAdmin() ? '退出' : '登录')));
   app.appendChild(h('div', { class: 'main' }, content));
   updateJudgeBadge();
 }
@@ -421,9 +441,23 @@ function shell(content, title) {
 async function logout() {
   try { await LemonAutosave.flushAll(); } catch (error) { return fail(error); }
   try { await api('POST', '/api/auth/logout'); } catch (e) { /* ignore */ }
+  resetSession();
+  if (location.hash.startsWith('#/login')) location.hash = '#/contests'; else route();
+}
+
+function resetSession() {
+  const previous = S.session;
   S.session = '';
-  localStorage.removeItem('lemonserver.session');
-  renderLogin();
+  if (localStorage.getItem('lemonserver.session') === previous) localStorage.removeItem('lemonserver.session');
+  S.status = { version: S.status?.version, authenticated: false, session: false, role: 'guest' };
+  S.settings = null; S.compilers = []; S.contest = null; S.fsView = null; S.pageKeys = null;
+  S.dataFiles = []; $('#datafiles')?.remove();
+  S.fs = { path: '', expanded: new Set(['']), cache: new Map(), selected: new Set() };
+  S.resultSel.clear(); S.resultRows = null; S.judgeTasks = null;
+  stopJudgePolling(); stopPublicPolling();
+  S.judge.status = null; S.judge.log = []; S.judge.since = 0; S.judge.contest = ''; S.judge.panelOpen = false;
+  $('#modal-root').replaceChildren();
+  $('#app').replaceChildren();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -431,6 +465,7 @@ async function logout() {
 // ------------------------------------------------------------------------------------------------
 function renderLogin() {
   stopJudgePolling();
+  stopPublicPolling();
   $('#modal-root').innerHTML = '';
   const app = $('#app');
   app.innerHTML = '';
@@ -444,6 +479,9 @@ function renderLogin() {
       localStorage.setItem('lemonserver.session', r.session);
       S.settings = null;
       if (r.tokenIsDefault) toast('仍是默认令牌，请在设置中修改');
+      S.status = { ...S.status, authenticated: true, role: 'admin', setupRequired: r.setupRequired };
+      stopPublicPolling();
+      if (location.hash.startsWith('#/login')) history.replaceState(null, '', '#/contests');
       boot();
     } catch (e) { err.textContent = e.message; input.select(); }
   };
@@ -451,9 +489,9 @@ function renderLogin() {
   app.appendChild(h('div', { class: 'login-wrap' }, h('div', { class: 'login-box' },
     h('img', { src: 'logo.png', alt: '' }),
     h('h2', null, 'LemonServer'),
-    input, err,
-    h('button', { class: 'primary', onclick: submit }, '登录'),
-    h('div', { style: { marginTop: '14px' } }, themeButton()))));
+    h('div', { class: 'login-fields' }, input, err,
+      h('button', { class: 'primary', onclick: submit }, '登录'), themeButton()),
+    h('a', { class: 'login-back', href: '#/contests' }, '返回比赛'))));
   input.focus();
 }
 
@@ -493,8 +531,11 @@ async function renderSetup() {
 // ------------------------------------------------------------------------------------------------
 // Contest list
 // ------------------------------------------------------------------------------------------------
-async function renderContestList() {
-  const data = await api('GET', '/api/contests');
+async function renderContestList(archived = false) {
+  const admin = isAdmin(), generation = publicGeneration;
+  const data = await api('GET', admin ? '/api/contests' : '/api/public/contests' + qs({ archived: archived ? 1 : 0 }));
+  if (admin !== isAdmin() || generation !== publicGeneration) return;
+  const contests = data.contests.filter(contest => !!contest.archived === archived);
   const name = h('input', { type: 'text', placeholder: '比赛名', style: { width: '320px' } });
   const create = async () => {
     const n = name.value.trim();
@@ -505,19 +546,24 @@ async function renderContestList() {
     } catch (e) { fail(e); }
   };
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); });
-  const items = data.contests.map((c) => h('div', { class: 'list-item' },
-    h('div', { class: 'grow', style: { cursor: 'pointer' }, onclick: () => go('#/contest/' + enc(c.name) + '/tasks') },
+  const destination = c => '#/contest/' + enc(c.name) + (admin && !c.archived ? '/tasks' : '/results');
+  const items = contests.map((c) => h('div', { class: 'list-item', 'data-contest': c.name },
+    h('div', { class: 'grow', style: { cursor: 'pointer' }, onclick: () => go(destination(c)) },
       h('div', { class: 'title' }, c.title || c.name,
+        admin ? h('span', { class: 'muted small-text', style: { marginLeft: '8px' } }, c.public ? '公开' : '未公开') : null,
         c.judging ? h('span', { class: 'pill', style: { marginLeft: '8px' } }, '评测中') : c.queuedJobs ? h('span', { class: 'pill', style: { marginLeft: '8px' } }, '排队中') : null),
       h('div', { class: 'muted small-text' }, [c.title && c.title !== c.name ? c.name : null, `${c.tasks ?? '-'} 题`, `${c.contestants ?? '-'} 名选手`, c.modified].filter(Boolean).join(' · '))),
-    h('button', { class: 'primary', onclick: () => go('#/contest/' + enc(c.name) + '/tasks') }, '打开'),
-    h('button', { onclick: () => cloneContestDlg(c) }, '克隆'),
-    h('button', {
+    h('button', { class: 'primary', onclick: () => go(destination(c)) }, '打开'),
+    admin && archived ? h('button', { 'data-unarchive': c.name, onclick: () => changeArchive(c.name, false) }, '取消存档') : null,
+    admin && !archived ? h('button', { onclick: () => changePublic(c.name, !c.public) }, c.public ? '取消公开' : '公开') : null,
+    admin && !archived ? h('button', { disabled: c.busy, onclick: () => changeArchive(c.name, true) }, '存档') : null,
+    admin && !archived ? h('button', { onclick: () => cloneContestDlg(c) }, '克隆') : null,
+    admin && !archived ? h('button', {
       class: 'danger', onclick: async () => {
         if (!await confirmDlg(`删除比赛“${c.name}”及其全部文件？无法恢复。`, '删除')) return;
         try { await api('DELETE', cpath(c.name)); route(); } catch (e) { fail(e); }
       },
-    }, '删除')));
+    }, '删除') : null));
   const importCard = h('div', { class: 'card' },
     h('h2', null, '导入比赛'),
     h('div', { class: 'row' },
@@ -534,16 +580,76 @@ async function renderContestList() {
     else if (items.length) importContestFolder(items);
   });
   shell(h('div', { class: 'page' }, h('div', { class: 'narrow' },
-    h('div', { class: 'card' },
+    admin && !archived ? h('div', { class: 'card' },
       h('h2', null, '新建比赛'),
       h('div', { class: 'row' }, name, h('button', { class: 'primary', onclick: create }, '新建')),
-      h('div', { class: 'hint', style: { marginTop: '8px' } }, '保存在 ', h('code', null, data.contestRoot), ' · ', h('a', { href: '#/settings/folder' }, '更改'))),
-    importCard,
+      h('div', { class: 'hint', style: { marginTop: '8px' } }, '保存在 ', h('code', null, data.contestRoot), ' · ', h('a', { href: '#/settings/folder' }, '更改'))) : null,
+    admin && !archived ? importCard : null,
     h('div', { class: 'card' },
-      h('h2', null, '全部比赛'),
-      data.contests.length ? items : h('div', { class: 'empty' }, '暂无比赛')))));
-  name.focus();
-  checkJudgeStatus();
+      h('h2', null, archived ? '已存档比赛' : admin ? '当前比赛' : '公开比赛'),
+      contests.length ? items : h('div', { class: 'empty' }, archived ? '暂无存档比赛' : admin ? '暂无比赛' : '暂无公开比赛')))));
+  if (admin && !archived) name.focus();
+  if (admin) checkJudgeStatus();
+}
+
+async function changePublic(name, visible, refresh = true) {
+  try { await LemonAutosave.flushAll(); } catch (error) { fail(error); return false; }
+  if (visible && !await confirmDlg('公开比赛的成绩和评测详情？源代码不会公开。', '公开', false)) return false;
+  try {
+    const contest = await api('PUT', cpath(name), { public: visible });
+    if (S.contest?.name === name) Object.assign(S.contest, contest);
+    if (refresh) await route();
+    return true;
+  } catch (error) { fail(error); return false; }
+}
+
+async function changeArchive(name, archived) {
+  try { await LemonAutosave.flushAll(); } catch (error) { fail(error); return; }
+  if (!await confirmDlg(archived ? '存档后只能查看，不能修改或评测；以后可取消存档。' : '取消存档后可继续修改和评测。', archived ? '存档' : '取消存档', false)) return;
+  try {
+    const contest = await api(archived ? 'POST' : 'DELETE', cpath(name) + '/archive');
+    if (S.contest?.name === name) S.contest = contest;
+    await route();
+  } catch (error) { fail(error); }
+}
+
+let publicGeneration = 0;
+function stopPublicPolling() {
+  if (S.publicTimer) clearInterval(S.publicTimer);
+  S.publicTimer = null; publicGeneration++;
+}
+
+function renderPublicStatus() {
+  const node = $('#public-status'), c = S.contest;
+  if (!node || !c) return;
+  const status = c.status || {}, percent = status.progressMaximum > 0 ? Math.min(100, status.progress / status.progressMaximum * 100).toFixed(0) + '%' : '';
+  node.textContent = c.archived ? '已存档' : c.judging ? '评测中 ' + percent : c.busy ? '排队中' : '未在评测';
+}
+
+async function renderPublicContest(name) {
+  const generation = publicGeneration;
+  const contest = await api('GET', publicPath(name));
+  if (generation !== publicGeneration || isAdmin()) return;
+  history.replaceState(null, '', '#/contest/' + enc(name) + '/results');
+  if (S.contest?.name !== name) { S.resultSort = { key: 'total', direction: -1 }; S.resultRows = null; S.resultSel.clear(); }
+  S.contest = contest; S.fsView = null; S.pageKeys = null;
+  const page = h('div', { class: 'tabpage' });
+  shell(h('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 } },
+    h('div', { class: 'subbar' }, h('span', null, '比赛结果'), h('span', { class: 'pill', id: 'public-status' })), page), contest.title);
+  renderPublicStatus(); renderResultsTab(page);
+  let refreshing = false;
+  S.publicTimer = setInterval(async () => {
+    if (refreshing || document.hidden || isAdmin() || generation !== publicGeneration) return;
+    refreshing = true;
+    try {
+      const value = await api('GET', publicPath(name));
+      if (generation !== publicGeneration || isAdmin()) return;
+      S.contest = value; renderPublicStatus(); rerenderResults({ keepOrder: value.busy });
+    } catch (error) {
+      if (generation !== publicGeneration || isAdmin()) return;
+      stopPublicPolling(); S.contest = null; $('#modal-root').replaceChildren(); $('#app').replaceChildren(); fail(error); go('#/contests');
+    } finally { refreshing = false; }
+  }, 1500);
 }
 
 // Copy a contest: tasks and data; optionally also the contestants' programs and results.
@@ -672,15 +778,21 @@ async function importContestFolder(items) {
 // Contest page
 // ------------------------------------------------------------------------------------------------
 async function reloadContest() {
-  S.contest = await api('GET', cpath(S.contest.name));
+  const name = S.contest?.name, session = S.session;
+  if (!name || !isAdmin()) return S.contest;
+  const contest = await api('GET', cpath(name));
+  if (!isAdmin() || S.session !== session || S.contest?.name !== name) return S.contest;
+  S.contest = contest;
   return S.contest;
 }
 
 async function loadDataFiles() {
+  const name = S.contest.name, session = S.session;
   try {
-    const r = await api('GET', cpath() + '/files' + qs({ root: 'data', recursive: 1 }));
+    const r = await api('GET', cpath(name) + '/files' + qs({ root: 'data', recursive: 1 }));
+    if (!isAdmin() || S.session !== session || S.contest?.name !== name) return;
     S.dataFiles = r.entries.map((e) => e.path).sort(lessFileName);
-  } catch (e) { S.dataFiles = []; }
+  } catch (e) { if (!isAdmin() || S.session !== session) return; S.dataFiles = []; }
   let dl = $('#datafiles');
   if (!dl) { dl = h('datalist', { id: 'datafiles' }); document.body.appendChild(dl); }
   dl.innerHTML = '';
@@ -688,8 +800,15 @@ async function loadDataFiles() {
 }
 
 async function renderContest(name, tab) {
+  const generation = publicGeneration;
   const prev = S.contest && S.contest.name;
-  S.contest = await api('GET', cpath(name));
+  const loaded = await api('GET', cpath(name));
+  if (!isAdmin() || generation !== publicGeneration) return;
+  S.contest = loaded;
+  if (loaded.archived) {
+    S.section = 'archives'; tab = 'results';
+    history.replaceState(null, '', '#/contest/' + enc(name) + '/results');
+  }
   if (prev !== name) {
     S.sel = { task: S.contest.tasks.length ? 0 : -1, testCase: -1, expanded: new Set() };
     S.resultSel = new Set();
@@ -699,9 +818,10 @@ async function renderContest(name, tab) {
     S.judgeTasks = null;
     S.fs = { path: '', expanded: new Set(['']), cache: new Map(), selected: new Set() };
   }
-  await loadDataFiles();
-  const tabs = [['tasks', '试题'], ['results', '结果'], ['statistics', '统计'], ['files', '文件']];
-  const title = h('span', null, h('span', { class: 'editable', title: '修改比赛名称', onclick: renameContest }, S.contest.title));
+  if (!loaded.archived) await loadDataFiles();
+  if (!isAdmin() || S.contest !== loaded) return;
+  const tabs = loaded.archived ? [['results', '结果']] : [['tasks', '试题'], ['results', '结果'], ['statistics', '统计'], ['files', '文件']];
+  const title = h('span', null, loaded.archived ? S.contest.title : h('span', { class: 'editable', title: '修改比赛名称', onclick: renameContest }, S.contest.title));
   const page = h('div', { class: 'tabpage' });
   if (S.fsView && tab !== 'files') S.fsView = null;
   shell(h('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 } },
@@ -709,7 +829,7 @@ async function renderContest(name, tab) {
       h('div', { class: 'segmented' }, tabs.map(([k, label]) => h('div', {
         class: k === tab ? 'active' : '', onclick: () => go('#/contest/' + enc(name) + '/' + k),
       }, label))),
-      h('button', { class: 'small', onclick: openContestProperties }, '比赛设置'),
+      loaded.archived ? h('button', { class: 'small', 'data-unarchive': name, onclick: () => changeArchive(name, false) }, '取消存档') : h('button', { class: 'small', onclick: openContestProperties }, '比赛设置'),
       h('span', { id: 'busy-slot', style: { display: 'contents' } }),
       h('div', { class: 'path', title: S.contest.directory }, S.contest.directory),
       h('button', { class: 'small hidden', id: 'judge-panel-toggle', onclick: () => { S.judge.panelOpen = true; renderJudgePanel(); } }, '评测日志')),
@@ -739,7 +859,13 @@ async function renameContest() {
 
 // down.zip (LemonServer's own contest property)
 function openContestProperties() {
+  if (!isAdmin() || S.contest.archived) return;
   let changed = false;
+  const published = h('input', { type: 'checkbox', checked: S.contest.public, onchange: async () => {
+    published.disabled = true;
+    try { changed = await changePublic(S.contest.name, published.checked, false) || changed; published.checked = !!S.contest.public; }
+    finally { published.disabled = false; }
+  } });
   const down = h('div');
   const zipList = h('datalist', { id: 'contest-zip-files' });
   api('GET', cpath() + '/files' + qs({ root: 'contest', recursive: 1 })).then((r) => {
@@ -769,10 +895,12 @@ function openContestProperties() {
   };
   renderDown();
 
-  modal({
+  const dialog = modal({
     title: '比赛设置',
     wide: '560px',
     body: h('div', null,
+      h('div', { class: 'row', style: { marginBottom: '16px' } }, h('label', { class: 'inline' }, published, '公开结果'),
+        h('button', { class: 'small right', disabled: S.contest.busy, onclick: () => { const name = S.contest.name; dialog.close(true); changeArchive(name, true); } }, '存档比赛')),
       h('div', { class: 'section-title', style: { marginTop: 0, textTransform: 'none' } }, 'down.zip'),
       h('div', { class: 'hint', style: { margin: '-4px 0 10px' } }, '供 CodeHub 导入的试题包，可不设置'),
       down,
@@ -1933,7 +2061,7 @@ function resultGridSelection(list, onChange, onMenu) {
         return;
       }
       S.resultAnchor = key;
-      if (S.resultSel.has(key)) {
+      if (S.resultSel.has(key) && (add || S.resultSel.size === 1)) {
         const remaining = new Set(S.resultSel);
         remaining.delete(key);
         select(remaining, []);
@@ -2035,6 +2163,7 @@ function rerenderResults(options = {}) {
 
 function renderResultsTab(page, options = {}) {
   const c = S.contest;
+  const admin = isAdmin(), editable = admin && !c.archived;
   if (S.resultSort.key.startsWith('task:') && +S.resultSort.key.slice(5) >= c.tasks.length) S.resultSort = { key: 'total', direction: -1 };
   if (S.judgeTasks) S.judgeTasks = new Set([...S.judgeTasks].filter(i => i < c.tasks.length));
   const names = new Set(c.contestants.map(contestant => contestant.name));
@@ -2056,7 +2185,7 @@ function renderResultsTab(page, options = {}) {
       } else download(cpath() + '/export' + qs({ format: v }), 'result.' + v);
     },
   }, h('option', { value: '' }, '导出…'), h('option', { value: 'html' }, 'result.html'), h('option', { value: 'view' }, '在新窗口查看'),
-  h('option', { value: 'htm' }, 'result.htm（精简）'), h('option', { value: 'csv' }, 'CSV'), h('option', { value: 'save' }, '保存到比赛文件夹'));
+  h('option', { value: 'htm' }, 'result.htm（精简）'), h('option', { value: 'csv' }, 'CSV'), editable ? h('option', { value: 'save' }, '保存到比赛文件夹') : null);
 
   const selectedList = () => {
     const map = new Map();
@@ -2077,13 +2206,13 @@ function renderResultsTab(page, options = {}) {
   const unjudgedBtn = h('button', { onclick: () => judgeIn('unjudged') }, '未评测');
   const stateBtn = h('button', { onclick: (e) => rejudgeByStateMenu(e.currentTarget) }, '按状态重测 ▾');
   const updateJudgeButtons = () => {
-    selBtn.disabled = !S.resultSel.size || noScope();
-    allBtn.disabled = stateBtn.disabled = !c.contestants.length || noScope();
-    unjudgedBtn.disabled = noScope();
+    selBtn.disabled = !editable || !S.resultSel.size || noScope();
+    allBtn.disabled = stateBtn.disabled = !editable || !c.contestants.length || noScope();
+    unjudgedBtn.disabled = !editable || noScope();
   };
   updateJudgeButtons();
   const delBtn = h('button', { class: 'danger', disabled: judging || !S.resultSel.size, onclick: deleteSelected }, '删除选中');
-  page.appendChild(h('div', { class: 'toolbar' },
+  page.appendChild(editable ? h('div', { class: 'toolbar' },
     h('button', { onclick: refreshContestants, disabled: judging }, '刷新选手'),
     h('div', { class: 'sep' }),
     taskScopePicker(updateJudgeButtons),
@@ -2091,10 +2220,11 @@ function renderResultsTab(page, options = {}) {
     h('div', { class: 'sep' }),
     delBtn,
     h('button', { disabled: judging, onclick: cleanupFiles }, '整理文件'),
-    h('div', { class: 'right' }, exportMenu)));
+    h('div', { class: 'right' }, exportMenu)) : h('div', { class: 'toolbar' },
+      h('span', { class: 'muted' }, c.archived ? '已存档，只读' : '公开结果'), h('span', { class: 'muted right' }, '双击查看结果详情'), admin ? exportMenu : null));
 
   if (!c.contestants.length) {
-    page.appendChild(h('div', { class: 'empty' }, '暂无选手。把程序放到 ', h('code', null, 'source/<选手>/'), ' 后点“刷新选手”。'));
+    page.appendChild(editable ? h('div', { class: 'empty' }, '暂无选手。把程序放到 ', h('code', null, 'source/<选手>/'), ' 后点“刷新选手”。') : h('div', { class: 'empty' }, '暂无结果'));
     return;
   }
 
@@ -2125,10 +2255,10 @@ function renderResultsTab(page, options = {}) {
       { label: sel.length > 1 ? `删除 ${sel.length} 名选手` : '删除选手', kbd: 'Delete', danger: true, disabled: judging, onClick: deleteSelected },
     ]);
   };
-  const bind = resultGridSelection(list, () => {
+  const bind = editable ? resultGridSelection(list, () => {
     updateJudgeButtons();
     delBtn.disabled = judging || !S.resultSel.size;
-  }, resultMenu);
+  }, resultMenu) : () => {};
   const table = h('table', { class: 'grid results' },
     h('tr', null, h('th', null, '排名'), sortHeader('选手', 'name'), sortHeader('总分', 'total'),
       c.tasks.map((t, i) => sortHeader([t.problemTitle, h('span', { class: 'muted', style: { fontWeight: 400, marginLeft: '4px' } }, t.totalScore)], 'task:' + i)),
@@ -2150,8 +2280,8 @@ function renderResultsTab(page, options = {}) {
           const failed = r.score !== -1 && c.tasks[j].taskType !== 1 && r.compileState !== 0;
           const td = h('td', {
             class: 'cell', style: { background: bg }, 'data-result-key': ct.name + '|' + j,
-            title: r.score === -1 ? (r.submitted ? '已提交，未评测' : '未提交') : (failed ? COMPILE_STATE[r.compileState] : (r.sourceFile || '')),
-          }, r.score === -1 ? h('span', { class: 'unjudged' + (r.submitted ? ' submitted' : '') }, r.submitted ? '未评测' : '未提交') : r.score,
+            title: r.score === -1 ? (!admin || r.submitted ? '未评测' : '未提交') : (failed ? COMPILE_STATE[r.compileState] : (r.sourceFile || '')),
+          }, r.score === -1 ? h('span', { class: 'unjudged' + (r.submitted ? ' submitted' : '') }, !admin || r.submitted ? '未评测' : '未提交') : r.score,
           failed ? h('span', { class: 'small-text', style: { opacity: 0.75, marginLeft: '5px' } }, COMPILE_ABBR[r.compileState]) : null);
           bind(td, row, j);
           td.addEventListener('dblclick', () => showDetail(ct.name, j));
@@ -2161,17 +2291,17 @@ function renderResultsTab(page, options = {}) {
         h('td', { class: 'muted' }, ct.totalScore >= 0 ? ct.judgingTime : '—'));
     }));
   page.appendChild(h('div', { class: 'results-wrap' }, table,
-    h('div', { class: 'legend' },
+    editable ? h('div', { class: 'legend' },
       h('span', null, h('i', { style: { background: nf } }), 'NS 未找到源程序'),
       h('span', null, h('i', { style: { background: ce } }), 'CE 等编译失败'),
-      h('span', { class: 'right' }, '拖动或 Shift 框选 · Ctrl 多选 · 双击查看详情'))));
-  S.pageKeys = {
+      h('span', { class: 'right' }, '拖动或 Shift 框选 · Ctrl 多选 · 双击查看详情')) : null));
+  S.pageKeys = editable ? {
     root: table,
     keydown: (e) => {
       if (e.key === 'Delete' && S.resultSel.size && !judging) { e.preventDefault(); deleteSelected(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); bind.selectAll(); }
     },
-  };
+  } : null;
 }
 
 async function rejudgeByStateMenu(anchor) {
@@ -2232,9 +2362,10 @@ async function cleanupFiles() {
 
 async function showDetail(name, focusTask) {
   // DetailDialog
+  const c = S.contest, admin = isAdmin();
   let d;
-  try { d = await api('GET', cpath() + '/contestants/' + enc(name)); } catch (e) { return fail(e); }
-  const c = S.contest;
+  try { d = await api('GET', (admin ? cpath(c.name) : publicPath(c.name)) + '/contestants/' + enc(name)); } catch (e) { return fail(e); }
+  if (admin !== isAdmin() || c.name !== S.contest?.name) return;
   const body = h('div', { style: { minWidth: '700px' } });
   c.tasks.forEach((t, i) => {
     const det = d.details[i];
@@ -2243,8 +2374,8 @@ async function showDetail(name, focusTask) {
       h('span', { class: 'muted' }, det.judged ? `${det.taskScore} / ${t.totalScore}` : '未评测'),
       det.sourceFile ? h('span', { class: 'muted small-text' }, det.sourceFile) : null,
       h('div', { class: 'right row' },
-        t.taskType !== 1 ? h('button', { class: 'small', onclick: () => showSource(name, i) }, '源程序') : null,
-        h('button', { class: 'small', onclick: () => { dlg.close(true); startJudge('selected', [{ contestant: name, tasks: [i] }]); } }, '重测'))));
+        admin && t.taskType !== 1 ? h('button', { class: 'small', onclick: () => showSource(name, i) }, '源程序') : null,
+        admin && !c.archived ? h('button', { class: 'small', onclick: () => { dlg.close(true); startJudge('selected', [{ contestant: name, tasks: [i] }]); } }, '重测') : null)));
     body.appendChild(sec);
     if (!det.judged) return;
     if (t.taskType !== 1 && det.compileState !== 0) {
@@ -2279,13 +2410,37 @@ async function showDetail(name, focusTask) {
 }
 
 async function showSource(name, task) {
+  if (!isAdmin()) return;
+  const contest = S.contest;
   try {
-    const r = await api('GET', cpath() + '/contestants/' + enc(name) + '/source/' + task);
+    const r = await api('GET', cpath(contest.name) + '/contestants/' + enc(name) + '/source/' + task);
+    if (!isAdmin() || S.contest?.name !== contest.name) return;
     modal({
       title: `${name} · ${S.contest.tasks[task].problemTitle}`,
-      body: r.files.length ? r.files.map((f) => h('div', null, h('div', { class: 'section-title' }, f.name), h('pre', { class: 'source-view' }, f.content))) : h('div', { class: 'empty' }, '未找到源程序'),
+      body: r.files.length ? r.files.map((f) => h('div', null,
+        h('div', { class: 'row source-head' }, h('div', { class: 'section-title' }, f.name), h('button', { class: 'small right', 'data-copy-source': true, onclick: async event => {
+          const button = event.currentTarget; button.disabled = true;
+          try { await copySourceText(f.content); toast('已复制代码'); } catch (error) { fail(error); } finally { button.disabled = false; }
+        } }, '复制代码')),
+        h('pre', { class: 'source-view' }, f.content))) : h('div', { class: 'empty' }, '未找到源程序'),
     });
   } catch (e) { fail(e); }
+}
+
+async function copySourceText(text) {
+  try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; } } catch { /* HTTP/permissions: use the selection fallback. */ }
+  const previous = document.activeElement, selection = window.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+  const area = h('textarea', { readonly: true, tabindex: '-1', 'aria-hidden': 'true', 'data-clipboard-copy': true, style: { position: 'fixed', left: '-10000px', top: '0' }, value: text });
+  document.body.appendChild(area);
+  try {
+    area.focus({ preventScroll: true }); area.select();
+    if (!document.execCommand('copy')) throw new Error('复制失败，请手动选择代码复制');
+  } finally {
+    area.remove();
+    if (previous?.isConnected) previous.focus({ preventScroll: true });
+    if (selection) { selection.removeAllRanges(); for (const range of ranges) selection.addRange(range); }
+  }
 }
 
 // ---------------------------------------- statistics tab -----------------------------------
@@ -3042,9 +3197,11 @@ async function openEditor(path, isNew, onSaved) {
 const JOB_MODE = { all: '全部', unjudged: '未评测', selected: '选中', grey: 'NS', magenta: '编译失败', state: '按状态' };
 
 async function startJudge(mode, items, extra = {}) {
+  if (!isAdmin() || S.contest?.archived) return false;
   try {
     await LemonAutosave.flushAll();
     const st = await api('POST', cpath() + '/judge', { mode, items, ...extra });
+    if (!isAdmin()) return false;
     const job = st.job || {};
     if (job.position === 0) {
       // started right away: a fresh log
@@ -3056,6 +3213,7 @@ async function startJudge(mode, items, extra = {}) {
     S.judge.status = st;
     S.judge.panelOpen = true;
     await reloadContest();
+    if (!isAdmin()) return false;
     if (location.hash.includes('/results')) { renderBusyBar(); rerenderResults({ keepOrder: true }); renderJudgePanel(); }
     else if (location.hash.includes('/contest/')) route(); else renderJudgePanel();
     startJudgePolling();
@@ -3090,8 +3248,10 @@ function startJudgePolling() {
 }
 
 async function checkJudgeStatus() {
+  if (!isAdmin()) return;
   try {
     const list = await api('GET', '/api/contests', undefined, { noLoginRedirect: true });
+    if (!isAdmin()) return;
     // also when the open contest is still shown as busy: the judging may have ended in the meantime
     const shownBusy = !!S.contest?.busy && location.hash.includes('/contest/');
     if ((list.judging || (list.queue || []).length || shownBusy) && !S.judge.timer) startJudgePolling();
@@ -3107,6 +3267,7 @@ async function pollJudge() {
   pollBusy = true;
   try {
     const st = await api('GET', '/api/judge/status' + qs({ since: S.judge.since }));
+    if (!isAdmin()) return;
     S.judge.status = st;
     S.judge.contest = st.contest;
     for (const e of st.events) {
@@ -3125,8 +3286,11 @@ async function pollJudge() {
     }
     // the open contest became busy / editable again
     if (cur && contestBusyIn(st, cur) !== !!S.contest.busy) {
+      // A completion event may have been missed/expired. The busy -> idle transition is authoritative.
+      if (S.contest.busy && !contestBusyIn(st, cur) && onResults) S.resultResort = true;
       await reloadContest();
-      if (onResults) { renderBusyBar(); rerenderResults({ keepOrder: !S.resultResort }); } else route();
+      if (!isAdmin() || S.contest?.name !== cur) return;
+      if (onResults) { renderBusyBar(); rerenderResults({ keepOrder: !S.resultResort }); S.resultResort = false; } else route();
     }
     if (!st.judging) {
       stopJudgePolling();
@@ -3139,8 +3303,11 @@ async function pollJudge() {
 }
 
 const refreshResultsQuietly = debounce(async () => {
+  if (!isAdmin()) return;
+  const name = S.contest?.name;
   try {
     await reloadContest();
+    if (!isAdmin() || S.contest?.name !== name) return;
     const resort = !!S.resultResort;
     S.resultResort = false;
     renderBusyBar();
@@ -3519,7 +3686,8 @@ function renderApiDoc() {
     ['比赛', ''],
     ['GET /api/contests', '比赛列表'],
     ['POST /api/contests', '{"name","title"?} 新建'],
-    ['GET · PUT · DELETE ' + C, '打开（试题与成绩）/ 修改 {"title"?,"downZip"?} / 删除'],
+    ['GET · PUT · DELETE ' + C, '打开（试题与成绩）/ 修改 {"title"?,"downZip"?,"public"?} / 删除'],
+    ['POST · DELETE ' + C + '/archive', '存档 / 取消存档；存档后禁止修改、评测和覆盖导入'],
     ['GET · PUT · DELETE ' + C + '/down-zip', '下载 / 上传（请求体为 zip，保存为 down.zip）/ 清除（&deleteFile=1 同时删除文件）；PUT ' + C + ' {"downZip":"路径"} 指定已有文件'],
     ['POST ' + C + '/clone', '{"name","title"?,"withSubmissions"?:false} 克隆比赛'],
     ['POST /api/import-contest?name=&overwrite=1', '请求体为比赛 zip（含 .cdf，可带一层顶层文件夹），导入为新比赛'],
@@ -3561,6 +3729,11 @@ function renderApiDoc() {
     ['GET /api/testlib/templates', '内置模板列表（checkers/wcmp.cpp 等）'],
     ['POST ' + C + '/files/template', '{"root","path":"目录","template","name"?} 从模板创建文件'],
     ['GET /api/testlib/testlib.h', '下载 testlib.h'],
+    ['游客只读（无需认证，仅公开比赛）', ''],
+    ['GET /api/public/contests?archived=0|1', '公开比赛列表，区分当前与已存档比赛'],
+    ['GET /api/public/contests/{name}', '成绩表及该比赛的评测状态，不含代码、文件或服务器路径'],
+    ['GET /api/public/contests/{name}/contestants/{who}', '结果详情，不含源码及编译输出'],
+    ['GET /api/public/contests/{name}/judge/status', '该公开比赛的评测进度，不含其他比赛或日志'],
   ];
   const o = location.origin;
   shell(h('div', { class: 'page' }, h('div', { class: 'narrow' }, h('div', { class: 'card' },

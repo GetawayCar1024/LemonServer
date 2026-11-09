@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict';
+import { withBrowser } from './browser_harness.mjs';
+
+await withBrowser(async ({ api, js, wait, send, click, open, origin, delay }) => {
+  for (const name of ['visible', 'private', 'old']) await api('POST', '/api/contests', { name });
+  await api('PUT', '/api/contests/visible', { public: true });
+  await api('PUT', '/api/contests/old', { public: true });
+  await api('POST', '/api/contests/old/archive');
+  await api('POST', '/api/contests/visible/tasks', { problemTitle: 'Echo', sourceFileName: 'echo', testCases: [] });
+  await api('PUT', '/api/contests/visible/files/upload?root=source&path=alice/echo.cpp', undefined, '// NEVER_EXPOSE_THIS_SOURCE\nint main(){}\n');
+  await api('POST', '/api/contests/visible/refresh');
+  await js(`localStorage.removeItem('lemonserver.session')`);
+  await send('Page.navigate', { url: origin });
+  await wait(`!!document.querySelector('[data-contest="visible"]')`);
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: false });
+  assert.ok(await js('document.documentElement.scrollWidth <= innerWidth + 1'), 'the guest navigation must fit a narrow viewport');
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  assert.equal(await js(`!!document.querySelector('[data-contest="private"], [data-contest="old"], .login-box')`), false);
+  assert.equal(await js(`[...document.querySelectorAll('.topbar button')].some(button=>button.textContent==='设置'||button.textContent==='API')`), false);
+  await js(`(()=>{window.guestRequests=[];const original=window.fetch;window.fetch=(input,...args)=>{window.guestRequests.push(String(input));return original(input,...args);};location.hash='#/contest/visible/results';})()`);
+  await wait(`!!document.querySelector('.results')`);
+  assert.equal(await js(`!!document.querySelector('[data-judge-scope]') || document.body.innerText.includes('删除选中')`), false);
+  await click('tr[data-contestant="alice"] .name', { clickCount: 2 });
+  await wait(`!!document.querySelector('.modal-back')`);
+  assert.equal(await js(`document.querySelector('.modal-back').textContent.includes('源程序') || document.querySelector('.modal-back').textContent.includes('重测')`), false);
+  await click('.modal-back .x');
+  assert.equal(await js(`window.guestRequests.some(url=>url.startsWith('/api/contests/')||url.startsWith('/api/settings')||url.startsWith('/api/judge'))`), false);
+  await js(`location.hash='#/archives'`);
+  await wait(`!!document.querySelector('[data-contest="old"]')`);
+  assert.equal(await js(`!!document.querySelector('[data-contest="visible"], [data-contest="private"]')`), false);
+  console.log('PASS default guest navigation, public archives and result-only details');
+
+  await js(`[...document.querySelectorAll('.topbar button')].find(button=>button.textContent==='登录').click()`);
+  await wait('!!document.querySelector(".login-box input")');
+  await js(`document.querySelector('.login-box input').value='123456';document.querySelector('.login-box button.primary').click()`);
+  await wait(`!!document.querySelector('[data-contest="private"]')`);
+  assert.equal(await js(`!!document.querySelector('[data-contest="old"]')`), false);
+  await js(`location.hash='#/archives'`);
+  await wait(`!!document.querySelector('[data-contest="old"]')`);
+  await open('old', 'results');
+  assert.equal(await js(`document.body.innerText.includes('删除选中') || document.body.innerText.includes('刷新选手') || document.body.innerText.includes('比赛设置')`), false);
+  await click('[data-unarchive]');
+  await wait(`document.activeElement === document.querySelector('.modal-back:last-child .modal-foot button:last-child') && document.activeElement.textContent==='取消存档'`);
+  for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: ' ', code: 'Space', windowsVirtualKeyCode: 32, ...(type==='keyDown'?{text:' '}:{}) });
+  await wait(`S.contest?.archived === false`);
+  assert.equal((await api('GET', '/api/contests/old')).archived, false);
+  await js(`(()=>{const edits=LemonAutosave.create(patch=>api('PUT',cpath('old'),patch),{delay:10000});edits.schedule({title:'Saved before archive'});changeArchive('old',true);return true;})()`);
+  await wait(`document.activeElement === document.querySelector('.modal-back:last-child .modal-foot button:last-child') && document.activeElement.textContent==='存档'`);
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await wait('S.contest?.archived === true');
+  assert.equal((await api('GET', '/api/contests/old')).title, 'Saved before archive');
+  assert.equal(await js('LemonAutosave.pending'), false);
+  console.log('PASS admin login, separate archive view and keyboard unarchive');
+
+  await js(`logout()`);
+  await wait(`!S.status.authenticated && !!document.querySelector('.topbar')`);
+  await js(`location.hash='#/contest/visible/results'`);
+  await wait('!!document.querySelector(".results")');
+  await api('PUT', '/api/contests/visible', { public: false });
+  await wait(`!document.querySelector('.results') && !document.querySelector('.source-view')`, 160);
+  assert.equal(await js(`document.body.innerText.includes('NEVER_EXPOSE_THIS_SOURCE')`), false);
+  console.log('PASS revoking public visibility clears the live guest view');
+
+  // An authenticated request finishing after logout must never restore private cards in the guest UI.
+  const all = await api('GET', '/api/contests');
+  const session = (await api('POST', '/api/auth/login', { token: '123456' })).session;
+  await js(`(()=>{
+    S.session=${JSON.stringify(session)};S.status.authenticated=true;
+    window.apiBeforeDelay=api;window.finishPrivateList=null;
+    api=(method,url,...args)=>url==='/api/contests'?new Promise(resolve=>{window.finishPrivateList=resolve;}):apiBeforeDelay(method,url,...args);
+    renderContestList();return true;
+  })()`);
+  await wait(`typeof window.finishPrivateList === 'function'`);
+  await js(`resetSession();route()`);
+  await js(`window.finishPrivateList(${JSON.stringify(all)})`);
+  await delay(100);
+  assert.equal(await js(`!!document.querySelector('[data-contest="private"]')`), false);
+  await js('api=window.apiBeforeDelay');
+  console.log('PASS late admin responses cannot restore private content after logout');
+});

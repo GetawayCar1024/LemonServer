@@ -14,6 +14,8 @@ LemonServer 是 [Project LemonLime](https://github.com/Project-LemonLime/Project
 | 网页中 | 对应 LemonLime 桌面版 |
 | --- | --- |
 | 比赛列表：新建（只需输入比赛名，自动存放在默认比赛位置）、打开、删除、改名、克隆（可选是否复制选手程序和成绩）；导入已配置好的比赛（含 .cdf 的文件夹或 zip，可拖拽） | 新建比赛 / 打开比赛 / 修改比赛名 |
+| 游客浏览：公开比赛的成绩、测试点结果与评测状态；不能查看代码、编译输出或管理功能。新建、克隆、导入默认不公开 | — |
+| 比赛存档：独立页面显示，存档后禁止修改、评测和覆盖导入，可取消存档；公开状态独立保留 | — |
 | 试题页：试题／测试点设置、右键操作、自动／批量添加，按钮或拖动重排题目；支持粘贴或选择本地 Hydro 配置导入 | SummaryTree、TaskEditWidget、TestCaseEditWidget、AddTestCasesWizard |
 | 测试点管理器：拖动连续选择、Ctrl/Shift 多选、双击编辑、右键修改／批量修改／绑定／合并／拆分／移动／删除、撤销重做；子任务浅深交替，依赖随调整保留 | ExtTestCaseModifier |
 | 结果页：成绩表（按选手名、单题或总分排序，同分按总用时、再按选手名；评测期间行的位置不变；单击选中／取消，Ctrl / Shift / 拖动多选；右键菜单“详情 / 评测 / 删除选手”同 LemonLime，另有“源程序”；Delete 删除选手）、评测按钮左侧选择题目（默认全部）后评测选中 / 全部 / 未评测 / 按状态重测（所有编译状态与测试点结果，显示每种状态的数量）、停止评测（正在评测的变为未评测）与取消评测（保留上次结果）、侧边栏中的实时评测日志与进度、全局评测队列（所有比赛依次评测，评测期间可编辑其他比赛，正在评测或排队的比赛不能修改，可“全部出队”）、选手详细结果、查看源程序、删除选手、整理选手文件 | ResultViewer、JudgingDialog、DetailDialog、清理文件 |
@@ -78,13 +80,17 @@ LemonServer [--host 0.0.0.0] [--port 8080] [--config <server.json>] [--web-root 
 
 启动后用浏览器打开 `http://<服务器IP>:8080/`：
 
-1. 输入访问令牌（默认 `123456`）。
+1. 默认进入游客页面，只显示公开的未存档比赛；“存档”显示公开的存档比赛。点击“登录”输入访问令牌（默认 `123456`）进入管理界面。
 2. 首次使用需要设置**默认比赛位置**（服务器上的绝对路径），可同时修改令牌。
 3. 新建比赛时只填比赛名，会自动创建 `<默认比赛位置>/<比赛名>/<比赛名>.cdf`、`data/`、`source/`。已有的 LemonLime 比赛文件夹可以直接复制到默认比赛位置下，或在网页中导入；LemonServer 生成的比赛同样可以用 LemonLime 桌面版打开。
 
 题目显示名可以用中文。源程序名（不含扩展名）和启用的文件输入输出名使用英文字母、数字、点、下划线或连字符，不可使用路径或系统保留名；改显示名不会重命名程序或数据。中文数据文件夹自动添加为题目时，会单独提供英文源程序名。配置自动保存，开始评测前会等待保存完成；保存失败时请根据提示修正或点击状态重试。
 
 测试点管理器左侧为子任务，右侧为测试点。选中右侧会关联其子任务；“合并子任务”合并完整子任务，“绑定到…”移动所选测试点。普通拖动用于选择，拖动把手用于排序，双击或 F2 编辑单元格。Hydro 转换范围及跳过规则见 [导入说明](docs/hydro-import.md)。
+
+比赛默认不公开。在比赛列表点击“公开”，或在“比赛设置”勾选“公开结果”，游客才可访问其结果页。游客结果接口采用字段白名单，不提供源码、编译输出、源文件大小、服务器路径或文件下载；取消公开后已打开的游客页面也会停止显示该比赛。
+
+存档状态与公开状态独立：公开比赛存档后仍可浏览结果，未公开的存档比赛只有管理员可见。存档会先保存当前修改，正在评测或排队的比赛不能存档；存档后的修改、评测、文件操作和覆盖导入都会被 API 拒绝，API Key 也不能绕过。取消存档后才能继续操作。标记保存在比赛目录的 `lemonserver.json`，不更改 LemonLime CDF 格式。
 
 - `--config`：服务器配置文件（令牌哈希、API Key、默认比赛位置），默认在 `%LOCALAPPDATA%\LemonServer\server.json`（Linux：`~/.config/LemonServer/server.json`）。
 - 评测设置与编译器默认保存在配置文件旁的 `settings.ini` 中，首次启动会自动检测 PATH 中的 gcc / g++ / fpc / jdk / python。加 `--use-desktop-settings` 则与本机的 LemonLime 桌面版共用设置。
@@ -102,6 +108,9 @@ LemonServer [--host 0.0.0.0] [--port 8080] [--config <server.json>] [--web-root 
 - 查询参数 `?access_token=<API Key>`（方便直接下载）
 
 API Key 在网页“设置 → 令牌与 API Key”中创建（可以自动生成，也可以自己指定），可以使用除“修改令牌 / 管理 API Key”之外的所有接口。完整接口列表见网页中的 **API** 页面，常用流程：
+
+- 管理员：`PUT /api/contests/{name}` 的 `{"public":true|false}` 修改公开状态；`POST /api/contests/{name}/archive` 存档，`DELETE /api/contests/{name}/archive` 取消存档。
+- 游客只读：`GET /api/public/contests`（`?archived=1` 查询存档）、`GET /api/public/contests/{name}`、`GET /api/public/contests/{name}/contestants/{who}` 和 `GET /api/public/contests/{name}/judge/status`。非公开比赛返回 404；现有管理接口仍需认证。
 
 ```bash
 KEY=lsk_xxx; S=http://server:8080; C=$S/api/contests/NOIP2026
