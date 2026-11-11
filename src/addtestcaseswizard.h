@@ -14,6 +14,7 @@
 #include <QString>
 #include <QStringList>
 #include <QWizard>
+#include "base/LemonType.hpp"
 
 namespace Ui {
 	class AddTestCasesWizard;
@@ -28,7 +29,7 @@ class AddTestCasesWizard : public QWizard {
 	explicit AddTestCasesWizard(QWidget *parent = nullptr);
 	~AddTestCasesWizard();
 	void setSettings(Settings *, bool);
-	int getFullScore() const;
+	Score getFullScore() const;
 	int getTimeLimit() const;
 	int getMemoryLimit() const;
 	const QList<QStringList> &getMatchedInputFiles() const;
@@ -37,7 +38,7 @@ class AddTestCasesWizard : public QWizard {
   private:
 	Ui::AddTestCasesWizard *ui;
 	Settings *settings{};
-	int fullScore{};
+	Score fullScore{};
 	int timeLimit{};
 	int memoryLimit{};
 	QString inputFilesPattern;

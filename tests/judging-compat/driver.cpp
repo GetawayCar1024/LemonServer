@@ -27,7 +27,10 @@ template<class T> static QJsonArray rows(const QList<QList<T>> &values) {
 	QJsonArray out;
 	for (const auto &row : values) {
 		QJsonArray list;
-		for (const auto &value : row) list.append(int(value));
+		for (const auto &value : row) {
+			if constexpr (std::is_enum_v<T>) list.append(int(value));
+			else list.append(value);
+		}
 		out.append(list);
 	}
 	return out;

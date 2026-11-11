@@ -15,7 +15,7 @@
 
 AddTaskDialog::AddTaskDialog(QWidget *parent) : QDialog(parent), ui(new Ui::AddTaskDialog) {
 	ui->setupUi(this);
-	ui->fullScore->setValidator(new QIntValidator(1, Settings::upperBoundForFullScore() * 100, this));
+	ui->fullScore->setValidator(new QDoubleValidator(0, double(Settings::upperBoundForFullScore()) * 100, 15, this));
 	ui->timeLimit->setValidator(new QIntValidator(1, Settings::upperBoundForTimeLimit(), this));
 	ui->memoryLimit->setValidator(new QIntValidator(1, Settings::upperBoundForMemoryLimit(), this));
 	connect(ui->taskBox, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -27,7 +27,7 @@ AddTaskDialog::AddTaskDialog(QWidget *parent) : QDialog(parent), ui(new Ui::AddT
 
 AddTaskDialog::~AddTaskDialog() { delete ui; }
 
-void AddTaskDialog::addTask(const QString &title, int _fullScore, int _timeLimit, int _memoryLimit) {
+void AddTaskDialog::addTask(const QString &title, Score _fullScore, int _timeLimit, int _memoryLimit) {
 	fullScore.append(_fullScore);
 	timeLimit.append(_timeLimit);
 	memoryLimit.append(_memoryLimit);
@@ -35,7 +35,7 @@ void AddTaskDialog::addTask(const QString &title, int _fullScore, int _timeLimit
 	ui->taskBox->setCurrentIndex(0);
 }
 
-auto AddTaskDialog::getFullScore(int index) const -> int {
+auto AddTaskDialog::getFullScore(int index) const -> Score {
 	if (0 <= index && index < fullScore.size()) {
 		return fullScore[index];
 	}
@@ -68,7 +68,7 @@ void AddTaskDialog::taskBoxIndexChanged() {
 
 void AddTaskDialog::fullScoreChanged() {
 	int index = ui->taskBox->currentIndex();
-	fullScore[index] = ui->fullScore->text().toInt();
+	fullScore[index] = ui->fullScore->text().toDouble();
 }
 
 void AddTaskDialog::timeLimitChanged() {

@@ -125,7 +125,7 @@ auto ExportUtil::getContestantHtmlCode(Contest *contest, Contestant *contestant,
 		QList<QStringList> message = contestant->getMessage(i);
 		QList<QList<int>> timeUsed = contestant->getTimeUsed(i);
 		QList<QList<qint64>> memoryUsed = contestant->getMemoryUsed(i);
-		QList<QList<int>> score = contestant->getScore(i);
+		QList<QList<Score>> score = contestant->getScore(i);
 
 		for (int j = 0; j < inputFiles.size(); j++) {
 			for (int k = 0; k < inputFiles[j].size(); k++) {
@@ -177,8 +177,8 @@ auto ExportUtil::getContestantHtmlCode(Contest *contest, Contestant *contestant,
 				htmlCode += "</td>";
 
 				if (k == 0) {
-					const int minv = std::ranges::min(score[j] | std::views::take(inputFiles[j].size()));
-					int maxv = testCases[j]->getFullScore();
+					const Score minv = std::ranges::min(score[j] | std::views::take(inputFiles[j].size()));
+					Score maxv = testCases[j]->getFullScore();
 
 					QString bgClass = "zero-score";
 
@@ -190,8 +190,8 @@ auto ExportUtil::getContestantHtmlCode(Contest *contest, Contestant *contestant,
 					htmlCode += QString(R"(<td rowspan="%1" class="%2"><span class="c">%3</span> / %4</td>)")
 					                .arg(inputFiles[j].size())
 					                .arg(bgClass)
-					                .arg(minv)
-					                .arg(maxv);
+					                .arg(scoreText(minv))
+					                .arg(scoreText(maxv));
 				}
 
 				htmlCode += "</tr>";
@@ -242,10 +242,10 @@ auto ExportUtil::generateHtml(Contest *contest) -> QString {
 
 	out << "<title>" << contest->getContestTitle() << " : " << tr("Contest Result") << "</title>";
 	out << "</head><body>";
-	QList<std::pair<int, QString>> sortList;
+	QList<std::pair<Score, QString>> sortList;
 
 	for (auto &i : contestantList) {
-		int totalScore = i->getTotalScore();
+		Score totalScore = i->getTotalScore();
 
 		if (totalScore != -1) {
 			sortList.append(std::make_pair(-totalScore, i->getContestantName()));
@@ -283,8 +283,8 @@ auto ExportUtil::generateHtml(Contest *contest) -> QString {
 		out << QString(R"(<th class="th-1" scope="col">%1</th>)").arg(i->getProblemTitle());
 
 	out << "</tr>";
-	QList<int> fullScore;
-	int sfullScore = contest->getTotalScore();
+	QList<Score> fullScore;
+	Score sfullScore = contest->getTotalScore();
 
 	for (auto &i : taskList) {
 		fullScore.append(i->getTotalScore());
@@ -297,7 +297,7 @@ auto ExportUtil::generateHtml(Contest *contest) -> QString {
 		out << QString(R"(<td class="td-0"><a href="#c%1" class="a-0">%2</a></td>)")
 		           .arg(loc[contestant])
 		           .arg(i.second);
-		int allScore = contestant->getTotalScore();
+		Score allScore = contestant->getTotalScore();
 
 		if (allScore >= 0) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -313,7 +313,7 @@ auto ExportUtil::generateHtml(Contest *contest) -> QString {
 			h *= 360, s *= 100, l *= 100;
 			out << QString("<td class=\"td-2\" style=\"background: hsl(%2,%3%,%4%); border: 2px solid "
 			               "hsl(%2,%3%,%5%);\">%1</td>")
-			           .arg(allScore)
+			           .arg(scoreText(allScore))
 			           .arg(h)
 			           .arg(s)
 			           .arg(l)
@@ -323,7 +323,7 @@ auto ExportUtil::generateHtml(Contest *contest) -> QString {
 		}
 
 		for (int j = 0; j < taskList.size(); j++) {
-			int score = contestant->getTaskScore(j);
+			Score score = contestant->getTaskScore(j);
 
 			if (score != -1) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -350,7 +350,7 @@ auto ExportUtil::generateHtml(Contest *contest) -> QString {
 				h *= 360, s *= 100, l *= 100;
 				out << QString(
 				           R"(<td class="td-3" style="background: hsl(%2,%3%,%4%);"><a href="#c%5p%6" class="a-0">%1</a></td>)")
-				           .arg(score)
+				           .arg(scoreText(score))
 				           .arg(h)
 				           .arg(s)
 				           .arg(l)
@@ -480,7 +480,7 @@ auto ExportUtil::getSmallerContestantHtmlCode(Contest *contest, Contestant *cont
 		QList<QStringList> message = contestant->getMessage(i);
 		QList<QList<int>> timeUsed = contestant->getTimeUsed(i);
 		QList<QList<qint64>> memoryUsed = contestant->getMemoryUsed(i);
-		QList<QList<int>> score = contestant->getScore(i);
+		QList<QList<Score>> score = contestant->getScore(i);
 
 		for (int j = 0; j < inputFiles.size(); j++) {
 			for (int k = 0; k < inputFiles[j].size(); k++) {
@@ -533,13 +533,13 @@ auto ExportUtil::getSmallerContestantHtmlCode(Contest *contest, Contestant *cont
 				htmlCode += "</td>";
 
 				if (k == 0) {
-					const int minv = std::ranges::min(score[j] | std::views::take(inputFiles[j].size()));
-					int maxv = testCases[j]->getFullScore();
+					const Score minv = std::ranges::min(score[j] | std::views::take(inputFiles[j].size()));
+					Score maxv = testCases[j]->getFullScore();
 
 					htmlCode += QString(R"(<td rowspan="%1"><span class="c">%2</span> / %3</td>)")
 					                .arg(inputFiles[j].size())
-					                .arg(minv)
-					                .arg(maxv);
+					                .arg(scoreText(minv))
+					                .arg(scoreText(maxv));
 				}
 
 				htmlCode += "</tr>";
@@ -568,10 +568,10 @@ auto ExportUtil::generateSmallerHtml(Contest *contest) -> QString {
 	       ".g {border-style: none solid solid none; border-width: 3px 2px; border-color: #000;}</style>";
 	out << "<title>" << contest->getContestTitle() << " : " << tr("Contest Result") << "</title>";
 	out << "</head><body>";
-	QList<std::pair<int, QString>> sortList;
+	QList<std::pair<Score, QString>> sortList;
 
 	for (auto &i : contestantList) {
-		int totalScore = i->getTotalScore();
+		Score totalScore = i->getTotalScore();
 
 		if (totalScore != -1) {
 			sortList.append(std::make_pair(-totalScore, i->getContestantName()));
@@ -609,10 +609,10 @@ auto ExportUtil::generateSmallerHtml(Contest *contest) -> QString {
 		out << QString("<th scope=\"col\">%1</th>").arg(i->getProblemTitle());
 
 	out << QString("</tr>");
-	QList<int> fullScore;
+	QList<Score> fullScore;
 
 	for (auto &i : taskList) {
-		int a = i->getTotalScore();
+		Score a = i->getTotalScore();
 		fullScore.append(a);
 	}
 
@@ -620,19 +620,19 @@ auto ExportUtil::generateSmallerHtml(Contest *contest) -> QString {
 		Contestant *contestant = contest->getContestant(i.second);
 		out << QString("<tr><td>%1</td>").arg(rankList[contestant->getContestantName()] + 1);
 		out << QString("<td><a href=\"#c%1\">%2</a></td>").arg(loc[contestant]).arg(i.second);
-		int allScore = contestant->getTotalScore();
+		Score allScore = contestant->getTotalScore();
 
 		if (allScore != -1) {
-			out << QString("<td class=\"f\">%1</td>").arg(allScore);
+			out << QString("<td class=\"f\">%1</td>").arg(scoreText(allScore));
 		} else {
 			out << QString("<td class=\"f\">%1</td>").arg(tr("Invalid"));
 		}
 
 		for (int j = 0; j < taskList.size(); j++) {
-			int score = contestant->getTaskScore(j);
+			Score score = contestant->getTaskScore(j);
 
 			if (score != -1) {
-				out << QString("<td>%1</td>").arg(score);
+				out << QString("<td>%1</td>").arg(scoreText(score));
 			} else {
 				out << QString("<td>%1</td>").arg(tr("Invalid"));
 			}
@@ -657,10 +657,10 @@ auto ExportUtil::generateCsv(Contest *contest) -> QString {
 	QTextStream out(&buffer);
 	QList<Contestant *> contestantList = contest->getContestantList();
 	QList<Task *> taskList = contest->getTaskList();
-	QList<std::pair<int, QString>> sortList;
+	QList<std::pair<Score, QString>> sortList;
 
 	for (auto &i : contestantList) {
-		int totalScore = i->getTotalScore();
+		Score totalScore = i->getTotalScore();
 
 		if (totalScore != -1) {
 			sortList.append(std::make_pair(-totalScore, i->getContestantName()));
@@ -700,19 +700,19 @@ auto ExportUtil::generateCsv(Contest *contest) -> QString {
 		out << "\"" << i.second << "\"" << ",";
 
 		for (int j = 0; j < taskList.size(); j++) {
-			int score = contestant->getTaskScore(j);
+			Score score = contestant->getTaskScore(j);
 
 			if (score != -1) {
-				out << "\"" << score << "\"" << ",";
+				out << "\"" << scoreText(score) << "\"" << ",";
 			} else {
 				out << "\"" << tr("Invalid") << "\"" << ",";
 			}
 		}
 
-		int score = contestant->getTotalScore();
+		Score score = contestant->getTotalScore();
 
 		if (score != -1) {
-			out << "\"" << score << "\"" << Qt::endl;
+			out << "\"" << scoreText(score) << "\"" << Qt::endl;
 		} else {
 			out << "\"" << tr("Invalid") << "\"" << Qt::endl;
 		}

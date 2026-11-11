@@ -83,7 +83,7 @@ void JudgingDialog::judgeAll() {
 }
 
 void JudgingDialog::singleCaseFinished(QString contestantName, int progress, int x, int y, int result,
-                                       int scoreGot, int timeUsed, qint64 memoryUsed) {
+                                       Score scoreGot, int timeUsed, qint64 memoryUsed) {
 	bool isOnMaxValue =
 	    ui->logViewer->verticalScrollBar()->value() == ui->logViewer->verticalScrollBar()->maximum();
 	QTextBlockFormat blockFormat;
@@ -298,8 +298,8 @@ void JudgingDialog::taskJudgingStarted(const QString &taskName) {
 		bar->setValue(bar->maximum());
 }
 
-void JudgingDialog::taskJudgedDisplay(const QString &taskName, const QList<QList<int>> &scoreList,
-                                      const int mxScore) {
+void JudgingDialog::taskJudgedDisplay(const QString &taskName, const QList<QList<Score>> &scoreList,
+                                      Score mxScore) {
 	bool isOnMaxValue =
 	    ui->logViewer->verticalScrollBar()->value() == ui->logViewer->verticalScrollBar()->maximum();
 	QTextBlockFormat blockFormat;
@@ -311,10 +311,10 @@ void JudgingDialog::taskJudgedDisplay(const QString &taskName, const QList<QList
 	scoreFormat.setFontPointSize(10);
 	scoreFormat.setFontWeight(QFont::Bold);
 	scoreFormat.setForeground(QBrush(Qt::darkCyan));
-	int allScore = 0;
+	Score allScore = 0;
 
 	for (const auto &i : scoreList) {
-		int miScore = 2147483647;
+		Score miScore = 2147483647;
 
 		for (auto j : i) {
 			if (j >= 0)
@@ -360,8 +360,8 @@ void JudgingDialog::contestantJudgingFinished() {
 		bar->setValue(bar->maximum());
 }
 
-void JudgingDialog::contestantJudgedDisplay(const QString &contestantName, const int score,
-                                            const int mxScore) {
+void JudgingDialog::contestantJudgedDisplay(const QString &contestantName, Score score,
+                                            Score mxScore) {
 	bool isOnMaxValue =
 	    ui->logViewer->verticalScrollBar()->value() == ui->logViewer->verticalScrollBar()->maximum();
 	QTextBlockFormat blockFormat;

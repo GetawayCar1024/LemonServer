@@ -40,6 +40,10 @@ enum ResultState {
 #include <QString>
 #include <QStringList>
 
+// Scores are real-valued; timing, verdicts and dependency-status codes remain integral.
+using Score = double;
+inline QString scoreText(Score value) { return QString::number(value, 'g', 12); }
+
 /* struct TaskResult {
     CompileState compileState;
     QString compileMessage;

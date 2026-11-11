@@ -13,6 +13,7 @@
 #include "exttestcaseupdaterdialog.h"
 //
 #include <functional>
+#include <cmath>
 #include <memory>
 #include <optional>
 
@@ -329,19 +330,16 @@ void ExtTestCaseModifier::splitSelected() {
 		TestCase *now = editTask->getTestCase(i);
 		auto in = now->getInputFiles();
 		auto out = now->getOutputFiles();
-		int allScore = now->getFullScore();
+		Score allScore = now->getFullScore();
 
-		// Distribute the total score evenly across test cases.
-		// The first baseCaseCount cases get floor(allScore / n),
-		// the remaining cases get ceil(allScore / n).
-		int baseCaseCount = 0;
-
-		if (! in.empty())
-			baseCaseCount = in.size() - allScore % in.size();
+		// Preserve integer apportionment; split fractional scores without truncation.
+		const bool whole = std::trunc(allScore) == allScore;
+		const Score per = in.empty() ? 0 : whole ? std::floor(allScore / in.size()) : allScore / in.size();
+		const Score baseCaseCount = in.size() - (allScore - per * in.size());
 
 		for (int j = 0; j < in.size(); j++) {
 			auto *app = new TestCase;
-			app->setFullScore((allScore / in.size()) + (j >= baseCaseCount));
+			app->setFullScore(whole ? per + (j >= baseCaseCount) : j + 1 == in.size() ? allScore - per * j : per);
 			app->setTimeLimit(now->getTimeLimit());
 			app->setMemoryLimit(now->getMemoryLimit());
 			app->setDependenceSubtask(now->getDependenceSubtask());

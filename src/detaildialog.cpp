@@ -134,7 +134,7 @@ void DetailDialog::refreshViewer(Contest *_contest, Contestant *_contestant) {
 		QList<QStringList> message = contestant->getMessage(i);
 		QList<QList<int>> timeUsed = contestant->getTimeUsed(i);
 		QList<QList<qint64>> memoryUsed = contestant->getMemoryUsed(i);
-		QList<QList<int>> score = contestant->getScore(i);
+		QList<QList<Score>> score = contestant->getScore(i);
 
 		for (int j = 0; j < inputFiles.size(); j++) {
 			for (int k = 0; k < inputFiles[j].size(); k++) {
@@ -199,8 +199,8 @@ void DetailDialog::refreshViewer(Contest *_contest, Contestant *_contestant) {
 				htmlCode += "</td>";
 
 				if (k == 0) {
-					int minv = 2147483647;
-					int maxv = testCases[j]->getFullScore();
+					Score minv = 2147483647;
+					Score maxv = testCases[j]->getFullScore();
 
 					for (int t = 0; t < inputFiles[j].size(); t++)
 						if (score[j][t] < minv)

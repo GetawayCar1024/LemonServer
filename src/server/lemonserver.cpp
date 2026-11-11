@@ -10,6 +10,7 @@
 #include "jsonapi.h"
 #include "serverconfig.h"
 #include "testlibtools.h"
+#include "publicresults.h"
 
 #include "base/LemonLog.hpp"
 #include "base/LemonTranslator.hpp"
@@ -23,6 +24,7 @@
 #include "core/testcase.h"
 
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QFuture>
 #include <QProcess>
 #include <QtConcurrent/QtConcurrentRun>
@@ -503,11 +505,25 @@ QJsonObject LemonServer::publicContestantJson(Contest *contest, Contestant *ct, 
 	return result;
 }
 
-QJsonObject LemonServer::publicJudgeStatus(const QString &name) const {
-	const auto status = manager->judgeStatus(std::numeric_limits<qint64>::max());
-	const bool running = status["running"].toBool() && status["contest"].toString() == name;
-	return {{"name", name}, {"judging", running}, {"busy", manager->isBusy(name)}, {"queuedJobs", manager->queuedJobs(name)},
-	        {"progress", running ? status["progress"].toDouble() : 0}, {"progressMaximum", running ? status["progressMaximum"].toDouble() : 0}};
+QJsonObject LemonServer::publicJudgeStatus(const QString &name, qint64 since) const {
+	const auto status = manager->judgeStatus(since);
+	const bool own = status["contest"].toString() == name, running = own && status["running"].toBool();
+	QJsonArray events;
+	if (own) for (const auto &value : status["events"].toArray()) {
+		const auto event = value.toObject();
+		const auto type = event["type"].toString();
+		if (!QStringList{"start", "case", "dependence", "taskStarted", "compile", "taskFinished", "finished", "stopping", "canceling"}.contains(type)) continue;
+		QJsonObject safe;
+		for (const char *key : {"id", "time", "type", "contestant", "task", "testCase", "subCase", "result", "score", "timeUsed", "memoryUsed", "state", "done", "total", "tasks", "dependence", "status", "stopped", "canceled"})
+			if (event.contains(key)) safe[key] = event[key];
+		events.append(safe);
+	}
+	while (events.size() > 200) events.removeFirst();
+	return {{"name", name}, {"judging", running}, {"busy", manager->isBusy(name)},
+	        {"progress", own ? status["progress"].toDouble() : 0}, {"progressMaximum", own ? status["progressMaximum"].toDouble() : 0},
+	        {"tasksDone", own ? status["tasksDone"].toInt() : 0}, {"tasksTotal", own ? status["tasksTotal"].toInt() : 0},
+	        {"started", own ? status["started"].toString() : QString()}, {"finished", own ? status["finished"].toString() : QString()},
+	        {"lastEventId", own ? status["lastEventId"] : QJsonValue(0)}, {"events", events}};
 }
 
 QJsonObject LemonServer::publicContestJson(Contest *contest) const {
@@ -526,7 +542,35 @@ QJsonObject LemonServer::publicContestJson(Contest *contest) const {
 	const auto name = manager->currentName();
 	return {{"name", name}, {"title", contest->getContestTitle()}, {"public", true}, {"archived", manager->isArchived(name)},
 	        {"totalScore", contest->getTotalScore()}, {"tasks", tasks}, {"contestants", contestants},
-	        {"judging", manager->judgingContest() == name}, {"busy", manager->isBusy(name)}, {"status", publicJudgeStatus(name)}};
+	        {"judging", manager->judgingContest() == name}, {"busy", manager->isBusy(name)}, {"status", publicJudgeStatus(name, std::numeric_limits<qint64>::max())}};
+}
+
+QHttpServerResponse LemonServer::cachedPublicResponse(const QString &key, quint64 revision, const QHttpServerRequest &request,
+                                                      const std::function<QJsonObject()> &build, int lifetime) const {
+	const auto now = QDateTime::currentMSecsSinceEpoch();
+	auto found = publicSnapshots.constFind(key);
+	PublicSnapshot snapshot;
+	if (found != publicSnapshots.cend() && found->revision == revision && found->expires > now) snapshot = *found;
+	else {
+		snapshot.bytes = QJsonDocument(build()).toJson(QJsonDocument::Compact);
+		snapshot.etag = '"' + QCryptographicHash::hash(snapshot.bytes, QCryptographicHash::Sha256).toHex() + '"';
+		snapshot.revision = revision; snapshot.expires = now + lifetime;
+		if (found != publicSnapshots.cend()) { publicSnapshotBytes -= found->bytes.size(); publicSnapshots.remove(key); }
+		if (snapshot.bytes.size() <= 64 * 1024 * 1024) {
+			publicSnapshots.insert(key, snapshot); publicSnapshotBytes += snapshot.bytes.size();
+			while (publicSnapshots.size() > 64 || publicSnapshotBytes > 64 * 1024 * 1024) {
+				publicSnapshotBytes -= publicSnapshots.first().bytes.size(); publicSnapshots.erase(publicSnapshots.begin());
+			}
+		}
+	}
+	const bool unchanged = request.headers().value("If-None-Match").toByteArray() == snapshot.etag;
+	QHttpServerResponse response = unchanged ? QHttpServerResponse(Status::NotModified)
+	                                       : QHttpServerResponse("application/json; charset=utf-8", snapshot.bytes);
+	auto headers = response.headers();
+	headers.replaceOrAppend(QHttpHeaders::WellKnownHeader::CacheControl, "no-store");
+	headers.replaceOrAppend("ETag", snapshot.etag);
+	response.setHeaders(std::move(headers));
+	return response;
 }
 
 void LemonServer::reinstallTranslation() {
@@ -840,6 +884,8 @@ void LemonServer::setupSettingsRoutes() {
 		if (! ok)
 			return errorResponse(Status::BadRequest, "invalid JSON");
 		const QString oldLanguage = settings->getUiLanguage();
+		if (body.contains("defaultFullScore") && (!body["defaultFullScore"].isDouble() || !qIsFinite(body["defaultFullScore"].toDouble()) || body["defaultFullScore"].toDouble() < 0 || body["defaultFullScore"].toDouble() > Settings::upperBoundForFullScore()))
+			return errorResponse(Status::BadRequest, "defaultFullScore must be a finite nonnegative number");
 		applySettingsJson(settings, body);
 		settings->saveSettings();
 		if (settings->getUiLanguage() != oldLanguage)
@@ -1200,6 +1246,7 @@ void LemonServer::setupContestRoutes() {
 		             if (auto r = notWhileBusy()) return std::move(*r);
 		             QString error;
 		             if (! manager->setArchived(req.method() == Method::Post, &error)) return errorResponse(Status::InternalServerError, error);
+		             if (queryFlag(req, "summary")) return jsonResponse({{"name", manager->currentName()}, {"archived", manager->isArchived(name)}, {"public", manager->isPublic(name)}});
 		             return jsonResponse(contestJson(contest));
 	             });
 
@@ -1728,37 +1775,58 @@ void LemonServer::setupContestRoutes() {
 
 void LemonServer::setupPublicRoutes() {
 	server.route("/api/public/contests", Method::Get, [this](const QHttpServerRequest &req) {
+		return cachedPublicResponse("list:" + QString::number(queryFlag(req, "archived")), manager->revision(), req, [this, &req] {
 		QJsonArray contests;
 		for (const auto &value : manager->listContests()) {
 			const auto original = value.toObject();
 			if (! original["public"].toBool() || original["archived"].toBool() != queryFlag(req, "archived")) continue;
 			QJsonObject contest;
-			for (const char *key : {"name", "title", "tasks", "contestants", "judging", "busy", "queuedJobs", "archived", "public"}) contest[key] = original[key];
+			for (const char *key : {"name", "title", "tasks", "contestants", "judging", "busy", "archived", "public"}) contest[key] = original[key];
 			contests.append(contest);
 		}
-		return publicResponse({{"contests", contests}});
+		return QJsonObject{{"contests", contests}};
+		}, 500);
 	});
-	server.route("/api/public/contests/<arg>", Method::Get, [this](const QString &name, const QHttpServerRequest &) {
+	server.route("/api/public/contests/<arg>", Method::Get, [this](const QString &name, const QHttpServerRequest &req) {
 		if (! manager->isPublic(name)) return errorResponse(Status::NotFound, tr("Contest is not public or does not exist"));
 		Contest *contest = nullptr;
 		if (auto r = withContest(name, &contest)) return std::move(*r);
-		return publicResponse(publicContestJson(contest));
+		return cachedPublicResponse("contest:" + manager->currentName(), manager->revision(name), req, [this, contest] { return publicContestJson(contest); }, manager->isArchived(name) ? 30000 : 1000);
 	});
 	server.route("/api/public/contests/<arg>/contestants/<arg>", Method::Get,
-	             [this](const QString &name, const QString &who, const QHttpServerRequest &) {
+	             [this](const QString &name, const QString &who, const QHttpServerRequest &req) {
 		             if (! manager->isPublic(name)) return errorResponse(Status::NotFound, tr("Contest is not public or does not exist"));
 		             Contest *contest = nullptr;
 		             if (auto r = withContest(name, &contest)) return std::move(*r);
 		             const auto contestant = contest->getContestant(who);
 		             if (! contestant) return errorResponse(Status::NotFound, tr("No such contestant"));
-		             return publicResponse(publicContestantJson(contest, contestant, true));
+		             return cachedPublicResponse("detail:" + manager->currentName() + '\n' + who, manager->revision(name), req, [this, contest, contestant] { return publicContestantJson(contest, contestant, true); });
 	             });
 	server.route("/api/public/contests/<arg>/judge/status", Method::Get,
-	             [this](const QString &name, const QHttpServerRequest &) {
+	             [this](const QString &name, const QHttpServerRequest &req) {
 		             if (! manager->isPublic(name)) return errorResponse(Status::NotFound, tr("Contest is not public or does not exist"));
 		             Contest *contest = nullptr;
 		             if (auto r = withContest(name, &contest)) return std::move(*r);
-		             return publicResponse(publicJudgeStatus(manager->currentName()));
+		             const auto since = queryValue(req, "since").toLongLong();
+		             return cachedPublicResponse("status:" + manager->currentName() + ':' + QString::number(since), manager->revision(name), req, [this, since] { return publicJudgeStatus(manager->currentName(), since); }, 250);
+	             });
+	server.route("/api/public/contests/<arg>/export", Method::Get,
+	             [this](const QString &name, const QHttpServerRequest &req) {
+		             if (!manager->isPublic(name)) return errorResponse(Status::NotFound, tr("Contest is not public or does not exist"));
+		             if (queryFlag(req, "save")) return errorResponse(Status::Forbidden, tr("Guests cannot save files on the server"));
+		             const auto format = queryValue(req, "format").isEmpty() ? QString("html") : queryValue(req, "format");
+		             if (format != "html" && format != "htm" && format != "csv") return errorResponse(Status::BadRequest, "format must be html, htm or csv");
+		             Contest *contest = nullptr;
+		             if (auto error = withContest(name, &contest)) return std::move(*error);
+		             auto result = publicContestJson(contest);
+		             if (format == "html") {
+			             QJsonArray people;
+			             for (auto *person : contest->getContestantList()) people.append(publicContestantJson(contest, person, true));
+			             result["contestants"] = people;
+		             }
+		             auto bytes = publicResultsDocument(result, format).toUtf8();
+		             if (format == "csv") bytes.prepend("\xEF\xBB\xBF");
+		             return downloadResponse(format == "csv" ? "text/csv; charset=utf-8" : "text/html; charset=utf-8", bytes, "result." + format);
 	             });
 }
 

@@ -38,7 +38,7 @@ class Contest : public QObject {
 	Contestant *getContestant(const QString &) const;
 	QList<Contestant *> getContestantList() const;
 	int getTotalTimeLimit() const;
-	int getTotalScore() const;
+	Score getTotalScore() const;
 	void addTask(Task *);
 	void deleteTask(int);
 	void refreshContestantList();
@@ -79,14 +79,14 @@ class Contest : public QObject {
 	void taskDeletedForViewer(int);
 	void problemTitleChanged();
 	void dialogAlert(QString);
-	void singleCaseFinished(QString, int, int, int, int, int, int, qint64);
+	void singleCaseFinished(QString, int, int, int, int, Score, int, qint64);
 	void singleSubtaskDependenceFinished(int, int, int);
 	void taskJudgingStarted(QString);
 	void taskJudgingFinished();
-	void taskJudgedDisplay(const QString &, const QList<QList<int>> &, const int);
+	void taskJudgedDisplay(const QString &, const QList<QList<Score>> &, Score);
 	void contestantJudgingStart(QString);
 	void contestantJudgingFinished();
-	void contestantJudgedDisplay(const QString &, const int, const int);
+	void contestantJudgedDisplay(const QString &, Score, Score);
 	void compileError(int, int);
 	void stopJudgingSignal();
 	// Same events as taskJudgingStarted / compileError, but telling which contestant and task they belong to.

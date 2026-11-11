@@ -8,6 +8,7 @@
  */
 
 #include "lemon.h"
+#include <cmath>
 #include "ui_lemon.h"
 //
 #include "addcompilerwizard.h"
@@ -836,7 +837,7 @@ void LemonLime::getFiles(const QString &path, const QStringList &filters, QMap<Q
 }
 
 void LemonLime::addTask(const QString &title, const QList<std::pair<QString, QString>> &testCases,
-                        int fullScore, int timeLimit, int memoryLimit) {
+                        Score fullScore, int timeLimit, int memoryLimit) {
 	Task *newTask = new Task;
 	newTask->setProblemTitle(title);
 	newTask->setSourceFileName(title);
@@ -858,7 +859,7 @@ void LemonLime::addTask(const QString &title, const QList<std::pair<QString, QSt
 }
 
 void LemonLime::addTaskWithScoreScale(const QString &title,
-                                      const QList<std::pair<QString, QString>> &testCases, int sumScore,
+                                      const QList<std::pair<QString, QString>> &testCases, Score sumScore,
                                       int timeLimit, int memoryLimit) {
 	Task *newTask = new Task;
 	newTask->setProblemTitle(title);
@@ -868,12 +869,13 @@ void LemonLime::addTaskWithScoreScale(const QString &title,
 	newTask->refreshCompilerConfiguration(settings);
 	newTask->setAnswerFileExtension(settings->getDefaultOutputFileExtension());
 	curContest->addTask(newTask);
-	int scorePer = sumScore / testCases.size();
-	int scoreLos = sumScore - scorePer * testCases.size();
+	const bool whole = std::trunc(sumScore) == sumScore;
+	const Score scorePer = testCases.empty() ? 0 : whole ? std::floor(sumScore / testCases.size()) : sumScore / testCases.size();
+	const Score scoreLos = sumScore - scorePer * testCases.size();
 
 	for (int i = 0; i < testCases.size(); i++) {
 		auto *newTestCase = new TestCase;
-		newTestCase->setFullScore(scorePer + static_cast<int>(i < scoreLos));
+		newTestCase->setFullScore(whole ? scorePer + static_cast<int>(i < scoreLos) : i + 1 == testCases.size() ? sumScore - scorePer * i : scorePer);
 		newTestCase->setTimeLimit(timeLimit);
 		newTestCase->setMemoryLimit(memoryLimit);
 		newTestCase->addSingleCase(title + QDir::separator() + testCases[i].first,

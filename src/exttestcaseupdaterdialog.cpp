@@ -18,7 +18,7 @@
 
 ExtTestCaseUpdaterDialog::ExtTestCaseUpdaterDialog(QWidget *parent, Task *nowTask,
                                                    const Settings *nowSettings, int nowCaseNumber,
-                                                   int editScore, int editData, int editTime, int editMemory,
+                                                   Score editScore, int editData, int editTime, int editMemory,
                                                    int editDepend, QList<int> tempDepends)
     : QDialog(parent), ui(new Ui::ExtTestCaseUpdaterDialog), nowTask(nowTask), nowSettings(nowSettings),
       nowCaseNumber(nowCaseNumber), editScore(editScore), editData(editData), editTime(editTime),
@@ -33,7 +33,7 @@ ExtTestCaseUpdaterDialog::ExtTestCaseUpdaterDialog(QWidget *parent, Task *nowTas
 	else
 		setWindowTitle(QString(tr("Configure")));
 
-	ui->lineEditScore->setValidator(new QIntValidator(0, nowSettings->upperBoundForFullScore(), this));
+	ui->lineEditScore->setValidator(new QDoubleValidator(0, nowSettings->upperBoundForFullScore(), 15, this));
 	ui->lineEditTime->setValidator(new QIntValidator(1, nowSettings->upperBoundForTimeLimit(), this));
 	ui->lineEditMemory->setValidator(new QIntValidator(1, nowSettings->upperBoundForMemoryLimit(), this));
 	ui->lineEditInput->setFilters(QDir::Files);
@@ -119,7 +119,7 @@ ExtTestCaseUpdaterDialog::ExtTestCaseUpdaterDialog(QWidget *parent, Task *nowTas
 
 ExtTestCaseUpdaterDialog::~ExtTestCaseUpdaterDialog() { delete ui; }
 
-auto ExtTestCaseUpdaterDialog::getScore() const -> int { return score; }
+auto ExtTestCaseUpdaterDialog::getScore() const -> Score { return score; }
 
 auto ExtTestCaseUpdaterDialog::getInput() const -> QString { return input; }
 
@@ -186,7 +186,7 @@ void ExtTestCaseUpdaterDialog::fullScoreChanged(const QString &text) {
 		else
 			ui->lineEditScore->setText(QString::number(defScore));
 	} else
-		score = text.toInt();
+		score = text.toDouble();
 }
 
 void ExtTestCaseUpdaterDialog::timeLimitChanged(const QString &text) {

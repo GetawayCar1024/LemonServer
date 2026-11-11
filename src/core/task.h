@@ -12,6 +12,7 @@
 
 #include <QMap>
 #include <QObject>
+#include "base/LemonType.hpp"
 
 class TestCase;
 class Settings;
@@ -94,7 +95,7 @@ class Task : public QObject {
 
 	void refreshCompilerConfiguration(Settings *);
 	int getTotalTimeLimit() const;
-	int getTotalScore() const;
+	Score getTotalScore() const;
 	int writeToJson(QJsonObject &in) const;
 	int readFromJson(const QJsonObject &);
 	void readFromStream(QDataStream &);

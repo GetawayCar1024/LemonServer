@@ -42,7 +42,7 @@ struct ProcessRunnerConfig {
 
 struct ProcessRunnerResult {
 	ResultState result = CorrectAnswer;
-	int score = 0;
+	Score score = 0;
 	int timeUsed = -1;
 	qint64 memoryUsed = -1;
 	QString message;

@@ -124,7 +124,7 @@ void ResultViewer::refreshViewer() {
 	setHorizontalHeaderLabels(headerList);
 	horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
 	QList<Contestant *> contestantList = curContest->getContestantList();
-	QList<std::pair<int, QString>> sortList;
+	QList<std::pair<Score, QString>> sortList;
 	setRowCount(contestantList.size());
 
 	for (int i = 0; i < contestantList.size(); i++) {
@@ -134,7 +134,7 @@ void ResultViewer::refreshViewer() {
 
 		for (int j = 0; j < taskList.size(); j++) {
 			setItem(i, j + 3, new QTableWidgetItem());
-			int score = contestantList[i]->getTaskScore(j);
+			Score score = contestantList[i]->getTaskScore(j);
 
 			if (score != -1) {
 				item(i, j + 3)->setData(Qt::DisplayRole, score);
@@ -145,7 +145,7 @@ void ResultViewer::refreshViewer() {
 
 		setItem(i, taskList.size() + 3, new QTableWidgetItem());
 		setItem(i, taskList.size() + 4, new QTableWidgetItem());
-		int totalScore = contestantList[i]->getTotalScore();
+		Score totalScore = contestantList[i]->getTotalScore();
 		int totalUsedTime = contestantList[i]->getTotalUsedTime();
 		QDateTime judgingTime = contestantList[i]->getJudingTime();
 
@@ -217,7 +217,7 @@ void ResultViewer::refreshColors() {
 			auto *scoreItem = item(row, task + 3);
 			if (! scoreItem)
 				continue;
-			const int score = contestant->getTaskScore(task);
+			const Score score = contestant->getTaskScore(task);
 			if (score == -1) {
 				scoreItem->setBackground(QBrush());
 			} else if (tasks[task]->getTaskType() != Task::AnswersOnly &&
@@ -231,7 +231,7 @@ void ResultViewer::refreshColors() {
 		}
 
 		if (auto *totalItem = item(row, 2)) {
-			const int score = contestant->getTotalScore();
+			const Score score = contestant->getTotalScore();
 			totalItem->setBackground(
 			    score == -1 ? QBrush() : QBrush(colors.getColorGrand(score, curContest->getTotalScore())));
 		}

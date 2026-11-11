@@ -66,12 +66,12 @@ class TaskJudger : public QObject {
 	QList<int> overallStatus;
 	QList<QList<int>> timeUsed;
 	QList<QList<qint64>> memoryUsed;
-	QList<QList<int>> score;
+	QList<QList<Score>> score;
 	QList<QList<ResultState>> result;
 	QList<QStringList> message;
 	QList<QStringList> inputFiles;
 
-	QList<int> testCaseScore;
+	QList<Score> testCaseScore;
 	bool traditionalTaskPrepare();
 	void assign();
 	void taskSkipped(const std::pair<int, int> &);
@@ -85,7 +85,7 @@ class TaskJudger : public QObject {
   signals:
 	void judgingStarted(QString);
 	void dialogAlert(QString);
-	void singleCaseFinished(QString, int, int, int, int, int, int, qint64);
+	void singleCaseFinished(QString, int, int, int, int, Score, int, qint64);
 	void singleSubtaskDependenceFinished(int, int, int);
 	void compileError(int, int);
 };

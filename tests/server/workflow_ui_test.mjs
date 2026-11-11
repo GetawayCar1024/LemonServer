@@ -1,0 +1,65 @@
+import assert from 'node:assert/strict';
+import { withBrowser } from './browser_harness.mjs';
+
+await withBrowser(async ({ api, js, wait, send, click, open, delay }) => {
+  const base = '/api/contests/workflow';
+  await api('POST', '/api/contests', { name: 'workflow' });
+  await api('PUT', base + '/files/upload?root=contest&path=notes.txt', undefined, 'read-only contents\n');
+  await api('PUT', base + '/files/upload?root=data&path=a.in', undefined, '1\n');
+  await api('PUT', base + '/files/upload?root=data&path=a.out', undefined, '1\n');
+  await api('POST', base + '/tasks', { problemTitle: 'A', sourceFileName: 'a', standardInputCheck: true, standardOutputCheck: true,
+    testCases: [{ fullScore: 0.25, timeLimit: 1000, memoryLimit: 128, inputFiles: ['a.in'], outputFiles: ['a.out'] }] });
+  await api('PUT', base + '/files/upload?root=source&path=alice/a.cpp', undefined, '#include <cstdio>\nint main(){puts("1");}\n');
+  const browserSession = (await api('POST', '/api/auth/login', { token: '123456' })).session;
+  await js(`localStorage.setItem('lemonserver.session', ${JSON.stringify(browserSession)})`);
+  await open('workflow', 'tasks');
+  if (!await js('!!document.querySelector(".tree-item.child")')) await click('[data-task="0"] .twisty');
+  await click('.tree-item.child');
+  await wait('!!document.querySelector(".editor input[type=number][step=any]")');
+  await js(`(()=>{const input=document.querySelector('.editor input[type=number][step=any]');input.value='0.375';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await js('LemonAutosave.flushAll()');
+  assert.equal((await api('GET', base + '/tasks/0')).testCases[0].fullScore, 0.375, 'fractional scores can be edited and autosaved in the browser');
+  await api('POST', base + '/refresh'); await api('POST', base + '/judge', { mode: 'all' });
+  await api('PUT', base, { public: true });
+  await open('workflow', 'results');
+  await wait(`!!document.querySelector('[data-result-sort="total"] .sort-icon.desc')`);
+  await click('[data-result-sort="name"]');
+  assert.ok(await js(`!!document.querySelector('[data-result-sort="name"] .sort-icon.asc')`));
+  await js('logout()');
+  await wait('!S.status.authenticated && !!document.querySelector(".results")');
+  const target = await js('location.hash');
+  await js(`[...document.querySelectorAll('.topbar button')].find(button=>button.textContent==='登录').click()`);
+  await wait('!!document.querySelector(".login-box")');
+  assert.equal(await js(`(()=>{const previous=sessionStorage.getItem('lemonserver.loginReturn');sessionStorage.setItem('lemonserver.loginReturn','https://example.org/');const safe=loginReturn();sessionStorage.setItem('lemonserver.loginReturn',previous);return safe;})()`), '#/contests');
+  await send('Page.reload');
+  await wait('!!document.querySelector(".login-box input")');
+  await js(`document.querySelector('.login-box input').value='123456';document.querySelector('.login-box button.primary').click()`);
+  await wait('S.status.authenticated && !!document.querySelector(".results")');
+  assert.equal(await js('location.hash'), target, 'login returns to the page from which it was opened');
+
+  for (let i = 0; i < 1200; i++) { if (!(await api('GET', '/api/judge/status')).judging) break; await delay(50); }
+  assert.equal((await api('GET', base + '/contestants/alice')).totalScore, 0.375);
+  await api('POST', base + '/archive');
+  await open('workflow', 'files');
+  await wait('!!document.querySelector(".fs-list")');
+  assert.ok(await js(`location.hash.endsWith('/files') && document.querySelector('.fs-list').textContent.includes('notes.txt')`));
+  await js(`(()=>{const row=[...document.querySelectorAll('.file-row')].find(row=>row.textContent.includes('notes.txt'));row.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));})()`);
+  await wait('!!document.querySelector(".modal textarea")');
+  assert.equal(await js('document.querySelector(".modal textarea").readOnly'), true);
+  assert.equal(await js(`[...document.querySelectorAll('.modal button')].some(button=>button.textContent==='保存'&&!button.disabled)`), false);
+  await click('.modal .x');
+  assert.equal(await js(`[...document.querySelectorAll('.fs button')].some(button=>!button.disabled&&/^上传|^新建/.test(button.textContent))`), false);
+  await open('workflow', 'tasks');
+  await wait('!!document.querySelector(".tree-list")');
+  assert.equal(await js(`[...document.querySelectorAll('.editor input,.editor select')].some(input=>!input.disabled&&!input.readOnly)`), false);
+  await js('logout()');
+  await wait('!S.status.authenticated && !!document.querySelector(".results")');
+  await click('[data-public-progress]');
+  await wait('!!document.querySelector("#public-progress-log")');
+  await wait(`document.querySelector('#public-progress-log').textContent.includes('alice')`);
+  assert.equal(await js(`document.querySelector('.public-progress').textContent.includes('评测队列') || !!document.querySelector('#judge-stop')`), false);
+  assert.equal(await js(`[...document.querySelector('[data-public-export]').options].some(option=>option.value==='save')`), false);
+  await js(`window.exportPath=null;download=async path=>{window.exportPath=path};const select=document.querySelector('[data-public-export]');select.value='csv';select.dispatchEvent(new Event('change'));`);
+  assert.equal(await js('window.exportPath'), '/api/public/contests/workflow/export?format=csv');
+  console.log('PASS login return, triangle sort marks, read-only archived files and guest progress/exports');
+});

@@ -21,7 +21,7 @@ struct TaskResult {
 	QList<QStringList> inputFiles;
 	QList<QList<ResultState>> result;
 	QList<QStringList> message;
-	QList<QList<int>> score;
+	QList<QList<Score>> score;
 	QList<QList<int>> timeUsed;
 	QList<QList<qint64>> memoryUsed;
 };

@@ -33,12 +33,15 @@ await withBrowser(async ({ api, js, wait, send, click, open, origin, delay }) =>
   await js(`[...document.querySelectorAll('.topbar button')].find(button=>button.textContent==='登录').click()`);
   await wait('!!document.querySelector(".login-box input")');
   await js(`document.querySelector('.login-box input').value='123456';document.querySelector('.login-box button.primary').click()`);
+  await wait(`S.status.authenticated && !!document.querySelector('[data-contest="old"]')`);
+  assert.equal(await js('location.hash'), '#/archives');
+  await js(`location.hash='#/contests'`);
   await wait(`!!document.querySelector('[data-contest="private"]')`);
   assert.equal(await js(`!!document.querySelector('[data-contest="old"]')`), false);
   await js(`location.hash='#/archives'`);
   await wait(`!!document.querySelector('[data-contest="old"]')`);
   await open('old', 'results');
-  assert.equal(await js(`document.body.innerText.includes('删除选中') || document.body.innerText.includes('刷新选手') || document.body.innerText.includes('比赛设置')`), false);
+  assert.equal(await js(`[...document.querySelectorAll('button')].some(button=>['删除选中','刷新选手'].includes(button.textContent)&&!button.disabled)`), false);
   await click('[data-unarchive]');
   await wait(`document.activeElement === document.querySelector('.modal-back:last-child .modal-foot button:last-child') && document.activeElement.textContent==='取消存档'`);
   for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: ' ', code: 'Space', windowsVirtualKeyCode: 32, ...(type==='keyDown'?{text:' '}:{}) });

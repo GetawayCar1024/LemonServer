@@ -19,7 +19,7 @@
 
 AddTestCasesWizard::AddTestCasesWizard(QWidget *parent) : QWizard(parent), ui(new Ui::AddTestCasesWizard) {
 	ui->setupUi(this);
-	ui->fullScore->setValidator(new QIntValidator(1, Settings::upperBoundForFullScore(), this));
+	ui->fullScore->setValidator(new QDoubleValidator(0, Settings::upperBoundForFullScore(), 15, this));
 	ui->timeLimit->setValidator(new QIntValidator(1, Settings::upperBoundForTimeLimit(), this));
 	ui->memoryLimit->setValidator(new QIntValidator(1, Settings::upperBoundForMemoryLimit(), this));
 	connect(ui->fullScore, &QLineEdit::textChanged, this, &AddTestCasesWizard::fullScoreChanged);
@@ -63,7 +63,7 @@ void AddTestCasesWizard::setSettings(Settings *_settings, bool check) {
 	refreshButtonState();
 }
 
-auto AddTestCasesWizard::getFullScore() const -> int { return fullScore; }
+auto AddTestCasesWizard::getFullScore() const -> Score { return fullScore; }
 
 auto AddTestCasesWizard::getTimeLimit() const -> int { return timeLimit; }
 
@@ -77,7 +77,7 @@ auto AddTestCasesWizard::getMatchedOutputFiles() const -> const QList<QStringLis
 	return matchedOutputFiles;
 }
 
-void AddTestCasesWizard::fullScoreChanged(const QString &text) { fullScore = text.toInt(); }
+void AddTestCasesWizard::fullScoreChanged(const QString &text) { fullScore = text.toDouble(); }
 
 void AddTestCasesWizard::timeLimitChanged(const QString &text) { timeLimit = text.toInt(); }
 

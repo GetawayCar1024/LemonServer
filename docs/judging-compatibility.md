@@ -4,7 +4,7 @@
 
 本项目基于 LemonLime 0.3.7，基准提交为 `69aa22370706a4f14b394a6e27aa92e7eca4a8f5`。
 
-`tests/judging-compat/prepare_reference.py` 从该提交原样提取 `casejudger.cpp`、`taskjudger.cpp`、`processrunner.cpp` 和各平台 runner。两个独立驱动分别链接当前版本与这些原版实现，用同一份临时数据、配置及编译器运行。参考驱动只补充服务器新增的路径设置接口，未更改原版评测算法；公共 Task / Contestant 数据及聚合代码沿用共同代码。Linux 驱动使用打包的 watcher。
+`tests/judging-compat/prepare_reference.py` 从该提交原样提取 `casejudger.cpp`、`taskjudger.cpp`、`processrunner.cpp` 和各平台 runner。两个独立驱动分别链接当前版本与这些原版实现，用同一份临时数据、配置及编译器运行。参考驱动只补充服务器新增的路径设置接口，未更改原版评测算法。参考 Task／TestCase／Contestant 数据、聚合实现、相关头文件及 Windows 沙箱依赖冻结在 0.1.11 的 `d082892e55c4dabc48e5d2c18a52b3da58866671`，单独编译，不与新的 double 分值模型混用 ABI。Linux 驱动使用打包的 watcher。
 
 比较的字段为：编译状态、逐测试点判定、逐测试点分数和总分。覆盖：
 
@@ -23,6 +23,7 @@
 - 保留 0.1.6 的用户态 CPU 计时、等待超时及重测修复。因此临界超时／大量系统调用程序可能与原版的旧计时行为不同。
 - 保留 Unicode 文件读取和每场比赛独立路径，修复原版路径编码及全局工作目录的问题。
 - 进度事件会统计被跳过的测试点；这不改变判定和分数。
+- 0.1.12 起支持小数分值。非整数计算不再按旧版截断；单独的 `fractional_scores_test.mjs` 覆盖配置、两类校验器、零分、依赖、非法分值、导出、统计、公开结果及重启。整数评测仍用上述对照测试核对。
 
 耗时、内存、路径和诊断措辞不参与逐字比较；这些字段受系统及修复影响。特殊校验器按 LemonLime 协议运行，不替换为其他 OJ 的评分协议。
 
@@ -33,7 +34,8 @@
 ```bash
 python tests/judging-compat/prepare_reference.py build/reference
 cmake -S . -B build -DBUILD_GUI=OFF -DLEMON_COMPAT_REFERENCE_DIR="$PWD/build/reference"
-cmake --build build --target judge-compat-current judge-compat-reference
+cmake --build build --target judge-compat-current judge-compat-reference score-persistence-test
+build/tests/judging-compat/score-persistence-test
 python tests/judging-compat/compare.py build/tests/judging-compat/judge-compat-current build/tests/judging-compat/judge-compat-reference
 ```
 

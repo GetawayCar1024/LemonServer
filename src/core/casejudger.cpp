@@ -61,7 +61,7 @@ void CaseJudger::setDataPath(const QString &path) { dataDir = path; }
 
 void CaseJudger::setTask(const Task *_task) { task = _task; }
 
-void CaseJudger::setFullScore(int score) { fullScore = score; }
+void CaseJudger::setFullScore(Score score) { fullScore = score; }
 
 void CaseJudger::setTimeLimit(int limit) { timeLimit = limit; }
 
@@ -86,9 +86,9 @@ auto CaseJudger::getTimeUsed() const -> int { return timeUsed; }
 
 auto CaseJudger::getMemoryUsed() const -> qint64 { return memoryUsed; }
 
-auto CaseJudger::getScore() const -> int { return score; }
+auto CaseJudger::getScore() const -> Score { return score; }
 
-auto CaseJudger::getFullScore() const -> int { return fullScore; }
+auto CaseJudger::getFullScore() const -> Score { return fullScore; }
 
 auto CaseJudger::getJudgeTimes() const -> int { return judgedTimes; }
 
@@ -491,7 +491,7 @@ void CaseJudger::lemonSpecialJudge(const QString &fileName) {
 
 	QProcess judge;
 	QStringList arguments;
-	arguments << inputFile << fileName << outputFile << QString("%1").arg(fullScore);
+	arguments << inputFile << fileName << outputFile << QString::number(fullScore, 'g', 17);
 	arguments << workingDirectory + "_score";
 	arguments << workingDirectory + "_message";
 	judge.start((dataDir.isEmpty() ? Settings::dataPath() : dataDir) + task->getSpecialJudge(), arguments);
@@ -550,7 +550,7 @@ void CaseJudger::lemonSpecialJudge(const QString &fileName) {
 	QTextStream scoreStream(&scoreFile);
 	scoreStream >> score;
 
-	if (scoreStream.status() == QTextStream::ReadCorruptData) {
+	if (scoreStream.status() != QTextStream::Ok || !std::isfinite(score)) {
 		score = 0;
 		result = InvalidSpecialJudge;
 		return;
@@ -662,15 +662,21 @@ void CaseJudger::testlibSpecialJudge(const QString &fileName) {
 		return;
 	}
 
-	QRegularExpressionMatch m = QRegularExpression(R"(^partially correct \((\d+)\))").match(message);
+	QRegularExpressionMatch m = QRegularExpression(R"(^partially correct \(([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\))").match(message);
+	if (message.startsWith("partially correct") && !m.hasMatch()) { result = InvalidSpecialJudge; return; }
 	if (m.hasMatch()) {
-		int val = m.captured(1).toInt();
+		bool ok = false;
+		const Score val = m.captured(1).toDouble(&ok);
+		if (!ok || !std::isfinite(val) || val < 0) { result = InvalidSpecialJudge; return; }
 		score = val * fullScore / 100;
 	}
 
-	m = QRegularExpression(R"(^points ([0-9]*\.[0-9]+|[0-9]+))").match(message);
+	m = QRegularExpression(R"(^points ([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:\s|$))").match(message);
+	if (message.startsWith("points") && !m.hasMatch()) { result = InvalidSpecialJudge; return; }
 	if (m.hasMatch()) {
-		double val = m.captured(1).toDouble();
+		bool ok = false;
+		const Score val = m.captured(1).toDouble(&ok);
+		if (!ok || !std::isfinite(val) || val < 0) { result = InvalidSpecialJudge; return; }
 		score = val * fullScore;
 	}
 
@@ -682,7 +688,7 @@ void CaseJudger::testlibSpecialJudge(const QString &fileName) {
 
 	scoreFile.close();
 
-	if (score < 0) {
+	if (!std::isfinite(score) || score < 0) {
 		score = 0;
 		result = InvalidSpecialJudge;
 		return;

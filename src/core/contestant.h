@@ -30,12 +30,12 @@ class Contestant : public QObject {
 	const QList<QStringList> &getInputFiles(int) const;
 	const QList<QList<ResultState>> &getResult(int) const;
 	const QList<QStringList> &getMessage(int) const;
-	const QList<QList<int>> &getScore(int) const;
+	const QList<QList<Score>> &getScore(int) const;
 	const QList<QList<int>> &getTimeUsed(int) const;
 	const QList<QList<qint64>> &getMemoryUsed(int) const;
 	QDateTime getJudingTime() const;
-	int getTaskScore(int) const;
-	int getTotalScore() const;
+	Score getTaskScore(int) const;
+	Score getTotalScore() const;
 	int getTotalUsedTime() const;
 
 	void setContestantName(const QString &);
@@ -46,7 +46,7 @@ class Contestant : public QObject {
 	void setInputFiles(int, const QList<QStringList> &);
 	void setResult(int, const QList<QList<ResultState>> &);
 	void setMessage(int, const QList<QStringList> &);
-	void setScore(int, const QList<QList<int>> &);
+	void setScore(int, const QList<QList<Score>> &);
 	void setTimeUsed(int, const QList<QList<int>> &);
 	void setMemoryUsed(int, const QList<QList<qint64>> &);
 	void setJudgingTime(QDateTime);
@@ -65,7 +65,7 @@ class Contestant : public QObject {
 	QList<QList<QStringList>> inputFiles;
 	QList<QList<QList<ResultState>>> result;
 	QList<QList<QStringList>> message;
-	QList<QList<QList<int>>> score;
+	QList<QList<QList<Score>>> score;
 	QList<QList<QList<int>>> timeUsed;
 	QList<QList<QList<qint64>>> memoryUsed;
 	QDateTime judgingTime;

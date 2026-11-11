@@ -115,15 +115,21 @@ const fmtTime = (t) => (t < 0 ? '—' : t + ' ms');
 const qs = (o) => '?' + Object.entries(o).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
 const joinPath = (a, b) => (a ? a + '/' + b : b);
 const parentPath = (p) => p.split('/').slice(0, -1).join('/');
+const scoreText = value => Number.isFinite(value) ? Number(value.toPrecision(12)).toString() : '—';
+const sortIcon = direction => h('span', { class: 'sort-icon' + (direction ? direction > 0 ? ' asc' : ' desc' : ''), 'aria-hidden': 'true' }, h('i', { class: 'up' }), h('i', { class: 'down' }));
 
 class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+const publicResponses = new Map();
 async function api(method, path, body, opt = {}) {
   const session = S.session;
   const headers = {};
   if (session) headers.Authorization = 'Bearer ' + session;
+  const publicGet = method === 'GET' && path.startsWith('/api/public/') && !opt.blob;
+  const previous = publicGet ? publicResponses.get(path) : null;
+  if (previous) headers['If-None-Match'] = previous.etag;
   let payload;
   if (opt.raw !== undefined) {
     payload = opt.raw;
@@ -136,7 +142,9 @@ async function api(method, path, body, opt = {}) {
     ? await LemonUpload.request(path, { method, headers, body: payload, onProgress: opt.onUploadProgress })
     : await fetch(path, { method, headers, body: payload });
   const ctype = res.headers.get('Content-Type') || '';
+  if (res.status === 304 && previous) return previous.data;
   if (!res.ok) {
+    if (publicGet) publicResponses.delete(path);
     let msg = res.status + ' ' + res.statusText;
     if (ctype.includes('json')) {
       try {
@@ -156,7 +164,14 @@ async function api(method, path, body, opt = {}) {
     throw new ApiError(res.status, msg);
   }
   if (opt.blob) return res;
-  if (ctype.includes('json')) return res.json();
+  if (ctype.includes('json')) {
+    const data = await res.json(), etag = res.headers.get('ETag');
+    if (publicGet && etag) {
+      publicResponses.set(path, { data, etag });
+      while (publicResponses.size > 64) publicResponses.delete(publicResponses.keys().next().value);
+    }
+    return data;
+  }
   return res.text();
 }
 
@@ -386,6 +401,7 @@ window.addEventListener('keydown', (e) => {
 async function go(hash) {
   try {
     await LemonAutosave.flushAll();
+    if (hash === '#/login') rememberLoginReturn(location.hash);
     if (location.hash === hash) route(); else location.hash = hash;
   } catch (error) { fail(error); }
 }
@@ -446,6 +462,7 @@ async function logout() {
 }
 
 function resetSession() {
+  publicResponses.clear();
   const previous = S.session;
   S.session = '';
   if (localStorage.getItem('lemonserver.session') === previous) localStorage.removeItem('lemonserver.session');
@@ -454,6 +471,7 @@ function resetSession() {
   S.dataFiles = []; $('#datafiles')?.remove();
   S.fs = { path: '', expanded: new Set(['']), cache: new Map(), selected: new Set() };
   S.resultSel.clear(); S.resultRows = null; S.judgeTasks = null;
+  S.publicProgress = null;
   stopJudgePolling(); stopPublicPolling();
   S.judge.status = null; S.judge.log = []; S.judge.since = 0; S.judge.contest = ''; S.judge.panelOpen = false;
   $('#modal-root').replaceChildren();
@@ -464,6 +482,7 @@ function resetSession() {
 // Login & first time setup
 // ------------------------------------------------------------------------------------------------
 function renderLogin() {
+  if (!location.hash.startsWith('#/login')) rememberLoginReturn(location.hash);
   stopJudgePolling();
   stopPublicPolling();
   $('#modal-root').innerHTML = '';
@@ -481,7 +500,7 @@ function renderLogin() {
       if (r.tokenIsDefault) toast('仍是默认令牌，请在设置中修改');
       S.status = { ...S.status, authenticated: true, role: 'admin', setupRequired: r.setupRequired };
       stopPublicPolling();
-      if (location.hash.startsWith('#/login')) history.replaceState(null, '', '#/contests');
+      if (!r.setupRequired) history.replaceState(null, '', loginReturn(true));
       boot();
     } catch (e) { err.textContent = e.message; input.select(); }
   };
@@ -491,7 +510,7 @@ function renderLogin() {
     h('h2', null, 'LemonServer'),
     h('div', { class: 'login-fields' }, input, err,
       h('button', { class: 'primary', onclick: submit }, '登录'), themeButton()),
-    h('a', { class: 'login-back', href: '#/contests' }, '返回比赛'))));
+    h('a', { class: 'login-back', href: /^#\/(contests|archives|contest\/)/.test(loginReturn()) ? loginReturn() : '#/contests' }, '返回比赛'))));
   input.focus();
 }
 
@@ -514,7 +533,7 @@ async function renderSetup() {
         localStorage.setItem('lemonserver.session', r.session);
       }
       S.status.setupRequired = false;
-      go('#/contests');
+      go(loginReturn(true));
     } catch (e) { err.textContent = e.message; }
   };
   app.appendChild(h('div', { class: 'login-wrap' }, h('div', { class: 'card', style: { width: '600px', padding: '26px 28px' } },
@@ -592,6 +611,15 @@ async function renderContestList(archived = false) {
   if (admin) checkJudgeStatus();
 }
 
+function rememberLoginReturn(hash) {
+  if (typeof hash === 'string' && hash.startsWith('#/') && !hash.startsWith('#/login') && hash.length <= 2048) sessionStorage.setItem('lemonserver.loginReturn', hash);
+}
+function loginReturn(remove = false) {
+  const value = sessionStorage.getItem('lemonserver.loginReturn');
+  if (remove) sessionStorage.removeItem('lemonserver.loginReturn');
+  return typeof value === 'string' && value.startsWith('#/') && !value.startsWith('#/login') ? value : '#/contests';
+}
+
 async function changePublic(name, visible, refresh = true) {
   try { await LemonAutosave.flushAll(); } catch (error) { fail(error); return false; }
   if (visible && !await confirmDlg('公开比赛的成绩和评测详情？源代码不会公开。', '公开', false)) return false;
@@ -607,7 +635,7 @@ async function changeArchive(name, archived) {
   try { await LemonAutosave.flushAll(); } catch (error) { fail(error); return; }
   if (!await confirmDlg(archived ? '存档后只能查看，不能修改或评测；以后可取消存档。' : '取消存档后可继续修改和评测。', archived ? '存档' : '取消存档', false)) return;
   try {
-    const contest = await api(archived ? 'POST' : 'DELETE', cpath(name) + '/archive');
+    const contest = await api(archived ? 'POST' : 'DELETE', cpath(name) + '/archive?summary=1');
     if (S.contest?.name === name) S.contest = contest;
     await route();
   } catch (error) { fail(error); }
@@ -633,10 +661,15 @@ async function renderPublicContest(name) {
   history.replaceState(null, '', '#/contest/' + enc(name) + '/results');
   if (S.contest?.name !== name) { S.resultSort = { key: 'total', direction: -1 }; S.resultRows = null; S.resultSel.clear(); }
   S.contest = contest; S.fsView = null; S.pageKeys = null;
+  if (S.publicProgress?.name !== name) S.publicProgress = { name, open: false, events: [], last: 0, started: '', status: null, loading: false };
   const page = h('div', { class: 'tabpage' });
   shell(h('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 } },
-    h('div', { class: 'subbar' }, h('span', null, '比赛结果'), h('span', { class: 'pill', id: 'public-status' })), page), contest.title);
+    h('div', { class: 'subbar' }, h('span', null, '比赛结果'), h('span', { class: 'pill', id: 'public-status' }),
+      h('button', { class: 'small right', 'data-public-progress': true, onclick: () => { S.publicProgress.open = !S.publicProgress.open; renderPublicProgress(); if (S.publicProgress.open) refreshPublicProgress(generation); } }, '评测进度')),
+    h('div', { class: 'contest-body' }, page, h('div', { id: 'public-progress-slot', style: { display: 'contents' } }))), contest.title);
   renderPublicStatus(); renderResultsTab(page);
+  renderPublicProgress();
+  if (S.publicProgress.open) refreshPublicProgress(generation);
   let refreshing = false;
   S.publicTimer = setInterval(async () => {
     if (refreshing || document.hidden || isAdmin() || generation !== publicGeneration) return;
@@ -644,12 +677,52 @@ async function renderPublicContest(name) {
     try {
       const value = await api('GET', publicPath(name));
       if (generation !== publicGeneration || isAdmin()) return;
-      S.contest = value; renderPublicStatus(); rerenderResults({ keepOrder: value.busy });
+      if (S.contest !== value) {
+        S.contest = value; renderPublicStatus(); rerenderResults({ keepOrder: value.busy });
+      }
+      if (S.publicProgress?.open) refreshPublicProgress(generation);
     } catch (error) {
       if (generation !== publicGeneration || isAdmin()) return;
       stopPublicPolling(); S.contest = null; $('#modal-root').replaceChildren(); $('#app').replaceChildren(); fail(error); go('#/contests');
     } finally { refreshing = false; }
   }, 1500);
+}
+
+async function refreshPublicProgress(generation) {
+  const progress = S.publicProgress;
+  if (!progress?.open || progress.loading || isAdmin()) return;
+  progress.loading = true;
+  try {
+    let status = await api('GET', publicPath(progress.name) + '/judge/status' + qs({ since: progress.last }));
+    if (generation !== publicGeneration || isAdmin() || S.publicProgress !== progress) return;
+    if (progress.status === status) return;
+    if (status.started && status.started !== progress.started) {
+      const previous = progress.started;
+      progress.events = []; progress.last = 0; progress.started = status.started;
+      if (previous) status = await api('GET', publicPath(progress.name) + '/judge/status?since=0');
+    }
+    if (generation !== publicGeneration || isAdmin() || S.publicProgress !== progress) return;
+    for (const event of status.events || []) if (event.id > progress.last) progress.events.push(event);
+    progress.events = progress.events.slice(-1000);
+    progress.last = Math.max(progress.last, status.lastEventId || 0); progress.status = status;
+    renderPublicProgress();
+  } catch (error) { if (generation === publicGeneration) fail(error); }
+  finally { progress.loading = false; }
+}
+
+function renderPublicProgress() {
+  const slot = $('#public-progress-slot'), progress = S.publicProgress;
+  if (!slot) return;
+  const previous = slot.querySelector('.judge-log'), top = previous?.scrollTop || 0;
+  const atBottom = !previous || previous.scrollHeight - previous.clientHeight - top < 30;
+  slot.replaceChildren();
+  if (!progress?.open) return;
+  const status = progress.status || {}, percent = status.progressMaximum > 0 ? Math.min(100, status.progress / status.progressMaximum * 100) : 0;
+  const log = h('div', { class: 'judge-log', id: 'public-progress-log' }, progress.events.length ? progress.events.map(judgeLine) : h('div', { class: 'empty' }, '暂无评测记录'));
+  slot.appendChild(h('aside', { class: 'judge-panel public-progress' },
+    h('div', { class: 'jp-head' }, h('b', null, '评测进度'), h('button', { class: 'x', title: '关闭', onclick: () => { progress.open = false; renderPublicProgress(); } }, '×')),
+    h('div', { class: 'jp-progress' }, h('div', { class: 'jp-progress-label' }, `${status.tasksDone || 0} / ${status.tasksTotal || 0}`, percent.toFixed(1) + '%'), h('div', { class: 'progress' }, h('div', { style: { width: percent + '%' } }))), log));
+  log.scrollTop = atBottom ? log.scrollHeight : top;
 }
 
 // Copy a contest: tasks and data; optionally also the contestants' programs and results.
@@ -805,10 +878,7 @@ async function renderContest(name, tab) {
   const loaded = await api('GET', cpath(name));
   if (!isAdmin() || generation !== publicGeneration) return;
   S.contest = loaded;
-  if (loaded.archived) {
-    S.section = 'archives'; tab = 'results';
-    history.replaceState(null, '', '#/contest/' + enc(name) + '/results');
-  }
+  if (loaded.archived) S.section = 'archives';
   if (prev !== name) {
     S.sel = { task: S.contest.tasks.length ? 0 : -1, testCase: -1, expanded: new Set() };
     S.resultSel = new Set();
@@ -818,9 +888,9 @@ async function renderContest(name, tab) {
     S.judgeTasks = null;
     S.fs = { path: '', expanded: new Set(['']), cache: new Map(), selected: new Set() };
   }
-  if (!loaded.archived) await loadDataFiles();
+  await loadDataFiles();
   if (!isAdmin() || S.contest !== loaded) return;
-  const tabs = loaded.archived ? [['results', '结果']] : [['tasks', '试题'], ['results', '结果'], ['statistics', '统计'], ['files', '文件']];
+  const tabs = [['tasks', '试题'], ['results', '结果'], ['statistics', '统计'], ['files', '文件']];
   const title = h('span', null, loaded.archived ? S.contest.title : h('span', { class: 'editable', title: '修改比赛名称', onclick: renameContest }, S.contest.title));
   const page = h('div', { class: 'tabpage' });
   if (S.fsView && tab !== 'files') S.fsView = null;
@@ -829,7 +899,8 @@ async function renderContest(name, tab) {
       h('div', { class: 'segmented' }, tabs.map(([k, label]) => h('div', {
         class: k === tab ? 'active' : '', onclick: () => go('#/contest/' + enc(name) + '/' + k),
       }, label))),
-      loaded.archived ? h('button', { class: 'small', 'data-unarchive': name, onclick: () => changeArchive(name, false) }, '取消存档') : h('button', { class: 'small', onclick: openContestProperties }, '比赛设置'),
+      h('button', { class: 'small', onclick: openContestProperties }, '比赛设置'),
+      loaded.archived ? h('button', { class: 'small', 'data-unarchive': name, onclick: () => changeArchive(name, false) }, '取消存档') : null,
       h('span', { id: 'busy-slot', style: { display: 'contents' } }),
       h('div', { class: 'path', title: S.contest.directory }, S.contest.directory),
       h('button', { class: 'small hidden', id: 'judge-panel-toggle', onclick: () => { S.judge.panelOpen = true; renderJudgePanel(); } }, '评测日志')),
@@ -859,9 +930,10 @@ async function renameContest() {
 
 // down.zip (LemonServer's own contest property)
 function openContestProperties() {
-  if (!isAdmin() || S.contest.archived) return;
+  if (!isAdmin()) return;
+  const readOnly = !!S.contest.archived;
   let changed = false;
-  const published = h('input', { type: 'checkbox', checked: S.contest.public, onchange: async () => {
+  const published = h('input', { type: 'checkbox', disabled: readOnly, checked: S.contest.public, onchange: async () => {
     published.disabled = true;
     try { changed = await changePublic(S.contest.name, published.checked, false) || changed; published.checked = !!S.contest.public; }
     finally { published.disabled = false; }
@@ -877,20 +949,20 @@ function openContestProperties() {
   };
   const renderDown = () => {
     const d = S.contest.downZip;
-    const pathInput = h('input', { type: 'text', list: 'contest-zip-files', placeholder: '文件路径', style: { width: '260px' } });
+    const pathInput = h('input', { type: 'text', disabled: readOnly, list: 'contest-zip-files', placeholder: '文件路径', style: { width: '260px' } });
     const upload = () => pickContestUpload({ accept: '.zip' }, (fs) => fs.length && setDown(() => api('PUT', cpath() + '/down-zip', undefined, { raw: fs[0] })));
     down.innerHTML = '';
     down.appendChild(h('div', { class: 'row', style: { marginBottom: '8px' } },
       d ? h('span', null, h('code', null, d.path), ' ', h('span', { class: d.exists ? 'muted small-text' : 'error-text small-text' }, d.exists ? `${formatSize(d.size)} · ${d.modified}` : '文件不存在'))
         : h('span', { class: 'muted' }, '未设置'),
       d && d.exists ? h('button', { class: 'small', onclick: () => download(cpath() + '/down-zip', 'down.zip') }, '下载') : null,
-      d ? h('button', { class: 'small danger', onclick: () => setDown(() => api('DELETE', cpath() + '/down-zip')) }, '清除') : null));
+      d ? h('button', { class: 'small danger', disabled: readOnly, onclick: () => setDown(() => api('DELETE', cpath() + '/down-zip')) }, '清除') : null));
     down.appendChild(h('div', { class: 'row' },
-      h('button', { class: 'small', onclick: upload }, d ? '重新上传' : '上传 zip'),
+      h('button', { class: 'small', disabled: readOnly, onclick: upload }, d ? '重新上传' : '上传 zip'),
       h('span', { class: 'muted small-text' }, '或'),
       pathInput,
       h('button', {
-        class: 'small', onclick: () => pathInput.value.trim() && setDown(async () => (await api('PUT', cpath(), { downZip: pathInput.value.trim() }))),
+        class: 'small', disabled: readOnly, onclick: () => pathInput.value.trim() && setDown(async () => (await api('PUT', cpath(), { downZip: pathInput.value.trim() }))),
       }, '设定')));
   };
   renderDown();
@@ -900,7 +972,7 @@ function openContestProperties() {
     wide: '560px',
     body: h('div', null,
       h('div', { class: 'row', style: { marginBottom: '16px' } }, h('label', { class: 'inline' }, published, '公开结果'),
-        h('button', { class: 'small right', disabled: S.contest.busy, onclick: () => { const name = S.contest.name; dialog.close(true); changeArchive(name, true); } }, '存档比赛')),
+        h('button', { class: 'small right', disabled: S.contest.busy || readOnly, onclick: () => { const name = S.contest.name; dialog.close(true); changeArchive(name, true); } }, readOnly ? '已存档' : '存档比赛')),
       h('div', { class: 'section-title', style: { marginTop: 0, textTransform: 'none' } }, 'down.zip'),
       h('div', { class: 'hint', style: { margin: '-4px 0 10px' } }, '供 CodeHub 导入的试题包，可不设置'),
       down,
@@ -914,11 +986,11 @@ function openContestProperties() {
 function renderTasksTab(page) {
   const treeList = h('div', { class: 'tree-list' });
   const editor = h('div', { class: 'editor' });
-  const judging = S.contest.busy; // being judged or queued: no editing
+  const judging = S.contest.busy || S.contest.archived;
   const noTask = S.sel.task < 0;
   const onCase = S.sel.testCase >= 0;
   const tree = h('div', { class: 'tree' },
-    h('div', { class: 'tree-head' }, '试题', h('span', { class: 'right muted small-text', style: { fontWeight: 400 } }, '总分 ' + S.contest.totalScore)),
+    h('div', { class: 'tree-head' }, '试题', h('span', { class: 'right muted small-text', style: { fontWeight: 400 } }, '总分 ' + scoreText(S.contest.totalScore))),
     treeList,
     h('div', { class: 'tree-actions' },
       h('div', { class: 'row' },
@@ -943,7 +1015,7 @@ function renderTasksTab(page) {
       if (S.sel.testCase >= 0) items.push({ label: '删除测试点', kbd: 'Delete', danger: true, disabled: judging, onClick: () => deleteTestCase(S.sel.task, S.sel.testCase) });
       else items.push('sep', { label: '测试点管理器', disabled: judging, onClick: () => openTestCaseManager(S.sel.task) },
         { label: '导入 Hydro 配置…', disabled: judging, onClick: () => importHydroConfig(S.sel.task) });
-      items.push('sep', { label: '评测此题', disabled: !S.contest.contestants.length, onClick: () => {
+      items.push('sep', { label: '评测此题', disabled: judging || !S.contest.contestants.length, onClick: () => {
         const task = S.sel.task;
         S.judgeTasks = new Set([task]); // the results page then shows the same scope
         startJudge('all', undefined, { tasks: [task] });
@@ -988,7 +1060,7 @@ function renderTasksTab(page) {
       oncontextmenu: pick(i, -1),
     }, h('span', {
       class: 'twisty', onclick: (e) => { e.stopPropagation(); if (S.sel.expanded.has(i)) S.sel.expanded.delete(i); else S.sel.expanded.add(i); rerenderTasks(); },
-    }, open ? '▼' : '▶'), h('span', { class: 'label' }, t.problemTitle || '(未命名)'), h('span', { class: 'score' }, t.totalScore));
+    }, open ? '▼' : '▶'), h('span', { class: 'label' }, t.problemTitle || '(未命名)'), h('span', { class: 'score' }, scoreText(t.totalScore)));
     taskRow.addEventListener('dragstart', e => {
       if (judging) { e.preventDefault(); return; }
       draggedTask = i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('application/x-lemon-task', String(i));
@@ -1014,7 +1086,7 @@ function renderTasksTab(page) {
           class: 'tree-item child' + (S.sel.task === i && S.sel.testCase === j ? ' selected' : ''),
           onclick: () => { S.sel.task = i; S.sel.testCase = j; rerenderTasks(); },
           oncontextmenu: pick(i, j),
-        }, h('span', { class: 'label' }, '#' + (j + 1)), h('span', { class: 'score' }, tc.fullScore + (tc.inputFiles.length > 1 ? ` · ${tc.inputFiles.length} 组` : ''))));
+        }, h('span', { class: 'label' }, '#' + (j + 1)), h('span', { class: 'score' }, scoreText(tc.fullScore) + (tc.inputFiles.length > 1 ? ` · ${tc.inputFiles.length} 组` : ''))));
       });
     }
   });
@@ -1133,7 +1205,7 @@ async function autoAddTasks() {
   const rows = found.map((t) => ({
     t, use: h('input', { type: 'checkbox', checked: true }),
     source: h('input', { type: 'text', value: t.sourceFileName, maxlength: 64, style: { width: '140px' } }),
-    score: h('input', { type: 'number', value: t.fullScore, style: { width: '80px' } }),
+    score: h('input', { type: 'number', step: 'any', value: t.fullScore, style: { width: '80px' } }),
     time: h('input', { type: 'number', value: t.timeLimit, style: { width: '90px' } }),
     mem: h('input', { type: 'number', value: t.memoryLimit, style: { width: '90px' } }),
   }));
@@ -1158,7 +1230,7 @@ async function autoAddTasks() {
 function renderTaskEditor(editor, i) {
   const t = JSON.parse(JSON.stringify(S.contest.tasks[i]));
   const status = h('span', { class: 'status-saved' });
-  const disabled = S.contest.busy;
+  const disabled = S.contest.busy || S.contest.archived;
   const save = LemonAutosave.create(async (patch) => {
       await saveTask(i, patch, true);
       const label = document.querySelectorAll('.tree-item:not(.child) .label')[i];
@@ -1264,7 +1336,7 @@ function renderTaskEditor(editor, i) {
 
   editor.appendChild(h('div', { class: 'editor-head' }, h('h2', null, t.problemTitle || '试题'), status,
     h('button', { class: 'small right', disabled, onclick: () => importHydroConfig(i) }, '导入 Hydro 配置'),
-    disabled ? h('span', { class: 'error-text small-text' }, '评测中，暂不可修改') : null));
+    disabled ? h('span', { class: 'error-text small-text' }, S.contest.archived ? '已存档，只读' : '评测中，暂不可修改') : null));
   editor.appendChild(grid);
   if (isComm) {
     editor.appendChild(pairTable('sourceFilesPath', 'sourceFilesName', '选手源文件', '选手目录中的文件'));
@@ -1281,7 +1353,7 @@ function renderTaskEditor(editor, i) {
   }
   editor.appendChild(h('div', { class: 'section' }, h('div', { class: 'section-title' }, '测试点'),
     h('div', { class: 'row' },
-      h('span', null, `${t.testCases.length} 个，共 ${t.totalScore} 分`),
+      h('span', null, `${t.testCases.length} 个，共 ${scoreText(t.totalScore)} 分`),
       h('button', { class: 'small primary', disabled, onclick: () => openTestCaseManager(i) }, '测试点管理器'),
       h('button', { class: 'small', disabled, onclick: () => addTestCasesWizard() }, '批量添加'))));
 }
@@ -1290,16 +1362,16 @@ function renderTestCaseEditor(editor, i, j) {
   const t = S.contest.tasks[i];
   const tc = JSON.parse(JSON.stringify(t.testCases[j]));
   const status = h('span', { class: 'status-saved' });
-  const disabled = S.contest.busy;
+  const disabled = S.contest.busy || S.contest.archived;
   const queue = LemonAutosave.create(async (patch) => {
       const cases = S.contest.tasks[i].testCases.map((x, k) => (k === j ? { ...x, ...patch } : x));
       await saveTask(i, { testCases: cases }, true);
       const sel = $('.tree-item.child.selected .score');
-      if (sel) sel.textContent = tc.fullScore + (tc.inputFiles.length > 1 ? ` · ${tc.inputFiles.length} 组` : '');
+      if (sel) sel.textContent = scoreText(tc.fullScore) + (tc.inputFiles.length > 1 ? ` · ${tc.inputFiles.length} 组` : '');
   }, { onState: state => { status.textContent = { pending: '待保存', saving: '保存中…', saved: '已保存', failed: '保存失败（点击重试）' }[state]; }, onError: fail });
   status.onclick = () => queue.flush().catch(fail);
   const save = () => queue.schedule(tc);
-  const num = (k) => h('input', { type: 'number', value: tc[k], disabled, oninput: (e) => { tc[k] = +e.target.value; save(); } });
+  const num = (k) => h('input', { type: 'number', step: k === 'fullScore' ? 'any' : 1, value: tc[k], disabled, oninput: (e) => { tc[k] = +e.target.value; save(); } });
   const deps = h('input', {
     type: 'text', value: tc.dependenceSubtask.join(', '), disabled: disabled || j === 0, placeholder: j === 0 ? '—' : '如 1, 2',
     oninput: (e) => {
@@ -1334,7 +1406,7 @@ async function addTestCasesWizard() {
   const i = S.sel.task;
   const t = S.contest.tasks[i];
   const base = t.sourceFileName || t.problemTitle;
-  const score = h('input', { type: 'number', value: S.settings.defaultFullScore });
+  const score = h('input', { type: 'number', step: 'any', value: S.settings.defaultFullScore });
   const time = h('input', { type: 'number', value: S.settings.defaultTimeLimit });
   const mem = h('input', { type: 'number', value: S.settings.defaultMemoryLimit });
   const inPat = h('input', { type: 'text', value: `${base}/${base}<1>.${S.settings.defaultInputFileExtension}`, class: 'mono' });
@@ -1616,7 +1688,8 @@ async function openTestCaseManager(taskIndex) {
         const base = n - (tc.fullScore % n);   // first `base` pieces get floor, the rest ceil (as in LemonLime)
         tc.inputFiles.forEach((f, k) => {
           newSel.add(items.length);
-          items.push({ tc: { ...tc, fullScore: Math.floor(tc.fullScore / n) + (k >= base ? 1 : 0), inputFiles: [f], outputFiles: [tc.outputFiles[k]] }, from: [i] });
+          const points = Number.isInteger(tc.fullScore) ? Math.floor(tc.fullScore / n) + (k >= base ? 1 : 0) : k + 1 === n ? tc.fullScore - (tc.fullScore / n) * k : tc.fullScore / n;
+          items.push({ tc: { ...tc, fullScore: points, inputFiles: [f], outputFiles: [tc.outputFiles[k]] }, from: [i] });
         });
       });
       cases = rebuild(items);
@@ -1689,17 +1762,17 @@ async function openTestCaseManager(taskIndex) {
     const t0 = cases[targets[0]];
     const sc = mk('分值', t0.fullScore), tl = mk('时限 ms', t0.timeLimit), ml = mk('内存 MiB', t0.memoryLimit), tot = mk('总分平均分配', '');
     const apply = () => {
-      if ([sc, tot].some(item => item.c.checked && (!Number.isInteger(+item.v.value) || +item.v.value < 0))
+      if ([sc, tot].some(item => item.c.checked && (!Number.isFinite(+item.v.value) || +item.v.value < 0))
         || [tl, ml].some(item => item.c.checked && (!Number.isInteger(+item.v.value) || +item.v.value <= 0))) {
-        toast('分值须为非负整数，时限和内存须为正整数', 'error'); return false;
+        toast('分值须为非负数，时限和内存须为正整数', 'error'); return false;
       }
       commit(() => {
-        const total = +tot.v.value, n = targets.length, per = Math.floor(total / n);
+        const total = +tot.v.value, n = targets.length, per = Number.isInteger(total) ? Math.floor(total / n) : total / n;
         targets.forEach((i, j) => {
           if (sc.c.checked) cases[i].fullScore = +sc.v.value;
           if (tl.c.checked) cases[i].timeLimit = +tl.v.value;
           if (ml.c.checked) cases[i].memoryLimit = +ml.v.value;
-          if (tot.c.checked) cases[i].fullScore = per + (j < total - per * n ? 1 : 0);
+          if (tot.c.checked) cases[i].fullScore = Number.isInteger(total) ? per + (j < total - per * n ? 1 : 0) : j + 1 === n ? total - per * j : per;
         });
       });
     };
@@ -1824,7 +1897,7 @@ async function openTestCaseManager(taskIndex) {
     h('div', { class: 'right row' }, mkBtn('undo', '↶ 撤销', doUndo, 'Ctrl+Z'), mkBtn('redo', '↷ 重做', doRedo, 'Ctrl+Y')));
 
   const numInput = (i, key, cls = 'num') => inlineEdit(h('input', {
-    type: 'number', class: cls, value: cases[i][key],
+    type: 'number', step: key === 'fullScore' ? 'any' : 1, class: cls, value: cases[i][key],
     onfocus: snapshotOnce, oninput: (e) => { cases[i][key] = +e.target.value; updateInfo(); },
   }));
   let focusSnap = false;
@@ -1917,7 +1990,7 @@ async function openTestCaseManager(taskIndex) {
     const files = cases.reduce((a, tc) => a + tc.inputFiles.length, 0);
     const missing = cases.reduce((a, tc) => a + [...tc.inputFiles, ...tc.outputFiles].filter((f) => f && !dataSet.has(f)).length, 0);
     const empty = cases.reduce((a, tc) => a + [...tc.inputFiles, ...tc.outputFiles].filter((f) => !f).length, 0);
-    info.textContent = `${cases.length} 个子任务 · ${files} 个测试点 · 总分 ${total}` + (missing ? ` · ${missing} 个文件不存在` : '') + (empty ? ` · ${empty} 个路径为空` : '') + (JSON.stringify(cases) !== original ? ' · 未保存' : '');
+    info.textContent = `${cases.length} 个子任务 · ${files} 个测试点 · 总分 ${scoreText(total)}` + (missing ? ` · ${missing} 个文件不存在` : '') + (empty ? ` · ${empty} 个路径为空` : '') + (JSON.stringify(cases) !== original ? ' · 未保存' : '');
   }
 
   const table = h('table', { class: 'tcm-table' },
@@ -2111,7 +2184,7 @@ function taskScopeLabel() {
 function taskScopePicker(onChange) {
   const c = S.contest;
   const label = h('span', { class: 'scope-label' }, taskScopeLabel());
-  const button = h('button', { class: 'scope-button', 'data-judge-scope': true, title: '评测哪些题目', disabled: !c.tasks.length }, label, h('span', { class: 'scope-caret' }));
+  const button = h('button', { class: 'scope-button', 'data-judge-scope': true, title: '评测哪些题目', disabled: c.archived || !c.tasks.length }, label, h('span', { class: 'scope-caret' }));
   const open = () => {
     const boxes = [];
     const allBox = h('input', { type: 'checkbox' });
@@ -2173,18 +2246,20 @@ function renderResultsTab(page, options = {}) {
   }
   const judging = c.busy; // being judged or queued: no editing (judging can still be queued)
   const exportMenu = h('select', {
+    'data-public-export': !admin,
     onchange: async (e) => {
       const v = e.target.value;
       e.target.value = '';
       if (!v) return;
       if (v === 'save') {
+        if (!editable) return;
         try { const r = await api('GET', cpath() + '/export' + qs({ format: 'html', save: 1 })); toast('已保存到 ' + r.file); } catch (err) { fail(err); }
       } else if (v === 'view') {
         const w = window.open('', '_blank');
         try { const html = await api('GET', cpath() + '/export' + qs({ format: 'html', inline: 1 })); w.document.write(html); w.document.close(); } catch (err) { w.close(); fail(err); }
-      } else download(cpath() + '/export' + qs({ format: v }), 'result.' + v);
+      } else download((admin ? cpath() : publicPath()) + '/export' + qs({ format: v }), 'result.' + v);
     },
-  }, h('option', { value: '' }, '导出…'), h('option', { value: 'html' }, 'result.html'), h('option', { value: 'view' }, '在新窗口查看'),
+  }, h('option', { value: '' }, '导出…'), h('option', { value: 'html' }, 'result.html'), admin ? h('option', { value: 'view' }, '在新窗口查看') : null,
   h('option', { value: 'htm' }, 'result.htm（精简）'), h('option', { value: 'csv' }, 'CSV'), editable ? h('option', { value: 'save' }, '保存到比赛文件夹') : null);
 
   const selectedList = () => {
@@ -2211,17 +2286,17 @@ function renderResultsTab(page, options = {}) {
     unjudgedBtn.disabled = !editable || noScope();
   };
   updateJudgeButtons();
-  const delBtn = h('button', { class: 'danger', disabled: judging || !S.resultSel.size, onclick: deleteSelected }, '删除选中');
-  page.appendChild(editable ? h('div', { class: 'toolbar' },
-    h('button', { onclick: refreshContestants, disabled: judging }, '刷新选手'),
+  const delBtn = h('button', { class: 'danger', disabled: !editable || judging || !S.resultSel.size, onclick: deleteSelected }, '删除选中');
+  page.appendChild(admin ? h('div', { class: 'toolbar' },
+    h('button', { onclick: refreshContestants, disabled: !editable || judging }, '刷新选手'),
     h('div', { class: 'sep' }),
     taskScopePicker(updateJudgeButtons),
     selBtn, allBtn, unjudgedBtn, stateBtn,
     h('div', { class: 'sep' }),
     delBtn,
-    h('button', { disabled: judging, onclick: cleanupFiles }, '整理文件'),
+    h('button', { disabled: !editable || judging, onclick: cleanupFiles }, '整理文件'),
     h('div', { class: 'right' }, exportMenu)) : h('div', { class: 'toolbar' },
-      h('span', { class: 'muted' }, c.archived ? '已存档，只读' : '公开结果'), h('span', { class: 'muted right' }, '双击查看结果详情'), admin ? exportMenu : null));
+      h('span', { class: 'muted' }, c.archived ? '已存档，只读' : '公开结果'), h('span', { class: 'muted right' }, '双击查看结果详情'), exportMenu));
 
   if (!c.contestants.length) {
     page.appendChild(editable ? h('div', { class: 'empty' }, '暂无选手。把程序放到 ', h('code', null, 'source/<选手>/'), ' 后点“刷新选手”。') : h('div', { class: 'empty' }, '暂无结果'));
@@ -2240,7 +2315,7 @@ function renderResultsTab(page, options = {}) {
     h('button', { class: 'result-sort', 'data-result-sort': key, onclick: () => {
       S.resultSort = { key, direction: S.resultSort.key === key ? -S.resultSort.direction : key === 'name' ? 1 : -1 };
       rerenderResults();
-    } }, label, S.resultSort.key === key ? (S.resultSort.direction > 0 ? ' ↑' : ' ↓') : ''));
+      } }, label, sortIcon(S.resultSort.key === key ? S.resultSort.direction : 0)));
   const nf = hslOf(theme().nf), ce = hslOf(theme().ce);
   // ResultViewer::contextMenuEvent(): details (one contestant), judge, delete
   const resultMenu = (e) => {
@@ -2250,18 +2325,18 @@ function renderResultsTab(page, options = {}) {
     showMenu(e.clientX, e.clientY, [
       one ? { label: h('b', null, '详情'), kbd: '双击', onClick: () => showDetail(one.contestant, cell >= 0 ? cell : undefined) } : null,
       cell >= 0 && c.tasks[cell].taskType !== 1 ? { label: '源程序', onClick: () => showSource(one.contestant, cell) } : null,
-      { label: sel.length > 1 ? `评测（${sel.length} 名选手）` : '评测', disabled: noScope(), onClick: () => judgeIn('selected', sel) },
+      { label: sel.length > 1 ? `评测（${sel.length} 名选手）` : '评测', disabled: !editable || noScope(), onClick: () => judgeIn('selected', sel) },
       'sep',
-      { label: sel.length > 1 ? `删除 ${sel.length} 名选手` : '删除选手', kbd: 'Delete', danger: true, disabled: judging, onClick: deleteSelected },
+      { label: sel.length > 1 ? `删除 ${sel.length} 名选手` : '删除选手', kbd: 'Delete', danger: true, disabled: !editable || judging, onClick: deleteSelected },
     ]);
   };
-  const bind = editable ? resultGridSelection(list, () => {
+  const bind = admin ? resultGridSelection(list, () => {
     updateJudgeButtons();
-    delBtn.disabled = judging || !S.resultSel.size;
+    delBtn.disabled = !editable || judging || !S.resultSel.size;
   }, resultMenu) : () => {};
   const table = h('table', { class: 'grid results' },
     h('tr', null, h('th', null, '排名'), sortHeader('选手', 'name'), sortHeader('总分', 'total'),
-      c.tasks.map((t, i) => sortHeader([t.problemTitle, h('span', { class: 'muted', style: { fontWeight: 400, marginLeft: '4px' } }, t.totalScore)], 'task:' + i)),
+      c.tasks.map((t, i) => sortHeader([t.problemTitle, h('span', { class: 'muted', style: { fontWeight: 400, marginLeft: '4px' } }, scoreText(t.totalScore))], 'task:' + i)),
       h('th', null, '用时 (s)'), h('th', null, '评测时间')),
     list.map((ct, row) => {
       const nameCell = h('td', { class: 'name', title: '双击查看详情' }, ct.name);
@@ -2270,7 +2345,7 @@ function renderResultsTab(page, options = {}) {
       return h('tr', { 'data-contestant': ct.name },
         h('td', null, rank[ct.name] !== undefined ? rank[ct.name] + 1 : '—'),
         nameCell,
-        h('td', { class: 'total', style: { background: ct.totalScore >= 0 ? colorGrand(ct.totalScore, c.totalScore) : '' } }, ct.totalScore >= 0 ? ct.totalScore : '—'),
+        h('td', { class: 'total', style: { background: ct.totalScore >= 0 ? colorGrand(ct.totalScore, c.totalScore) : '' } }, ct.totalScore >= 0 ? scoreText(ct.totalScore) : '—'),
         ct.tasks.map((r, j) => {
           let bg = '';
           if (r.score !== -1) {
@@ -2281,7 +2356,7 @@ function renderResultsTab(page, options = {}) {
           const td = h('td', {
             class: 'cell', style: { background: bg }, 'data-result-key': ct.name + '|' + j,
             title: r.score === -1 ? (!admin || r.submitted ? '未评测' : '未提交') : (failed ? COMPILE_STATE[r.compileState] : (r.sourceFile || '')),
-          }, r.score === -1 ? h('span', { class: 'unjudged' + (r.submitted ? ' submitted' : '') }, !admin || r.submitted ? '未评测' : '未提交') : r.score,
+          }, r.score === -1 ? h('span', { class: 'unjudged' + (r.submitted ? ' submitted' : '') }, !admin || r.submitted ? '未评测' : '未提交') : scoreText(r.score),
           failed ? h('span', { class: 'small-text', style: { opacity: 0.75, marginLeft: '5px' } }, COMPILE_ABBR[r.compileState]) : null);
           bind(td, row, j);
           td.addEventListener('dblclick', () => showDetail(ct.name, j));
@@ -2295,10 +2370,10 @@ function renderResultsTab(page, options = {}) {
       h('span', null, h('i', { style: { background: nf } }), 'NS 未找到源程序'),
       h('span', null, h('i', { style: { background: ce } }), 'CE 等编译失败'),
       h('span', { class: 'right' }, '拖动或 Shift 框选 · Ctrl 多选 · 双击查看详情')) : null));
-  S.pageKeys = editable ? {
+  S.pageKeys = admin ? {
     root: table,
     keydown: (e) => {
-      if (e.key === 'Delete' && S.resultSel.size && !judging) { e.preventDefault(); deleteSelected(); }
+      if (e.key === 'Delete' && S.resultSel.size && !judging && editable) { e.preventDefault(); deleteSelected(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); bind.selectAll(); }
     },
   } : null;
@@ -2371,7 +2446,7 @@ async function showDetail(name, focusTask) {
     const det = d.details[i];
     const sec = h('div', { class: 'detail-task', id: 'detail-task-' + i });
     sec.appendChild(h('div', { class: 'row', style: { marginBottom: '8px' } }, h('h3', null, t.problemTitle),
-      h('span', { class: 'muted' }, det.judged ? `${det.taskScore} / ${t.totalScore}` : '未评测'),
+      h('span', { class: 'muted' }, det.judged ? `${scoreText(det.taskScore)} / ${scoreText(t.totalScore)}` : '未评测'),
       det.sourceFile ? h('span', { class: 'muted small-text' }, det.sourceFile) : null,
       h('div', { class: 'right row' },
         admin && t.taskType !== 1 ? h('button', { class: 'small', onclick: () => showSource(name, i) }, '源程序') : null,
@@ -2400,12 +2475,12 @@ async function showDetail(name, focusTask) {
           h('td', null, resultTag(det.result[j][k]), msg ? h('div', { class: 'muted small-text', style: { whiteSpace: 'pre-wrap', maxWidth: '340px', marginTop: '3px' } }, msg) : null),
           h('td', null, fmtTime(det.timeUsed[j][k])),
           h('td', null, fmtMem(det.memoryUsed[j][k])),
-          k === 0 ? h('td', { rowspan: files.length, class: span }, h('b', null, isFinite(minv) ? minv : 0), h('span', { class: 'muted' }, ' / ' + (tc ? tc.fullScore : '?'))) : null));
+          k === 0 ? h('td', { rowspan: files.length, class: span }, h('b', null, isFinite(minv) ? scoreText(minv) : 0), h('span', { class: 'muted' }, ' / ' + (tc ? scoreText(tc.fullScore) : '?'))) : null));
       });
     });
     sec.appendChild(table);
   });
-  const dlg = modal({ title: `${name} · ${d.totalScore >= 0 ? d.totalScore + ' 分' : '未完成评测'}`, body, wide: '880px' });
+  const dlg = modal({ title: `${name} · ${d.totalScore >= 0 ? scoreText(d.totalScore) + ' 分' : '未完成评测'}`, body, wide: '880px' });
   if (focusTask !== undefined) setTimeout(() => { const el = $('#detail-task-' + focusTask); if (el) el.scrollIntoView(); }, 50);
 }
 
@@ -2514,6 +2589,8 @@ const FS_SHORTCUTS = [
 
 async function renderFilesTab(page) {
   const F = S.fs;
+  const readOnly = !!S.contest.archived;
+  if (readOnly) F.clip = null;
   F.sort = F.sort || { key: 'name', dir: 1 };
   F.filter = F.filter || '';
   let entries;
@@ -2548,12 +2625,14 @@ async function renderFilesTab(page) {
     else fsDownload(full(e.name), e.name);
   };
   const remove = async () => {
+    if (readOnly) return;
     const paths = selectedPaths();
     if (!paths.length) return;
     if (!await confirmDlg(paths.length === 1 ? `删除 ${paths[0].split('/').pop()}？` : `删除选中的 ${paths.length} 项？`, '删除')) return;
     try { await api('POST', cpath() + '/files/delete', { root: 'contest', paths }); reload([]); } catch (err) { fail(err); }
   };
   const rename = async () => {
+    if (readOnly) return;
     const sel = visible.filter((e) => F.selected.has(e.name));
     if (sel.length !== 1) return;
     const old = sel[0].name;
@@ -2569,6 +2648,7 @@ async function renderFilesTab(page) {
     paint();
   };
   const paste = async (dest = F.path) => {
+    if (readOnly) return;
     if (!F.clip) return;
     const { mode, paths } = F.clip;
     try {
@@ -2616,6 +2696,7 @@ async function renderFilesTab(page) {
   // ---------- upload ----------
   let pasteSerial = 0;
   const uploadTo = async (dir, items) => {
+    if (readOnly) return;
     if (!items.length) return;
     const label = h('div', null, '准备上传…');
     const bar = h('div', { style: { width: '0%' }, 'data-upload-progress': true });
@@ -2640,6 +2721,7 @@ async function renderFilesTab(page) {
     }
   };
   const unzipTo = async (dir, file) => {
+    if (readOnly) return;
     const strip = h('input', { type: 'checkbox', checked: true });
     let ok = false;
     await new Promise((resolve) => modal({
@@ -2686,6 +2768,11 @@ async function renderFilesTab(page) {
   };
   // Folder drop target: internal drags move/copy, external files upload.
   const dropTarget = (el, dirFn, cls = 'drop') => {
+    if (readOnly) {
+      el.addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'none'; });
+      el.addEventListener('drop', event => { event.preventDefault(); event.stopPropagation(); });
+      return;
+    }
     el.addEventListener('dragover', (e) => {
       const internal = isInternalDrag(e);
       if (internal && S.fsDragPaths && S.fsDragPaths.some((p) => dirFn() === p || dirFn().startsWith(p + '/'))) return;
@@ -2739,7 +2826,9 @@ async function renderFilesTab(page) {
   };
 
   // ---------- context menus ----------
-  const folderMenu = (x, y, dir) => showMenu(x, y, [
+  const folderMenu = (x, y, dir) => showMenu(x, y, readOnly ? [
+    { label: '下载为 zip', onClick: () => fsDownload(dir, (dir.split('/').pop() || S.contest.name) + '.zip') },
+  ] : [
     { label: '新建文件', kbd: 'Alt+N', onClick: () => { if (dir !== F.path) { F.path = dir; } newFile(); } },
     { label: '新建文件夹', kbd: 'Alt+Shift+N', onClick: () => { if (dir !== F.path) { F.path = dir; } newFolder(); } },
     'sep',
@@ -2753,6 +2842,10 @@ async function renderFilesTab(page) {
   const itemMenu = (x, y) => {
     const sel = visible.filter((e) => F.selected.has(e.name));
     const one = sel.length === 1 ? sel[0] : null;
+    if (readOnly) return showMenu(x, y, [
+      one ? { label: one.dir ? '打开' : '查看', kbd: 'Enter', onClick: () => openEntry(one) } : null,
+      { label: '下载', onClick: () => sel.forEach(entry => fsDownload(full(entry.name), entry.dir ? entry.name + '.zip' : entry.name)) },
+    ]);
     showMenu(x, y, [
       one ? { label: one.dir ? '打开' : one.size < EDIT_LIMIT ? '编辑' : '下载', kbd: 'Enter', onClick: () => openEntry(one) } : null,
       compilable(one) ? { label: '编译（Testlib for Lemons）…', kbd: 'Ctrl+B', onClick: compileSelected } : null,
@@ -2809,12 +2902,12 @@ async function renderFilesTab(page) {
     h('button', { class: 'small', 'data-fs-search': true, onclick: () => applyFilter(filterInput.value) }, '查找'));
   const toolbar = h('div', { class: 'toolbar' }, crumbs,
     h('div', { class: 'right row' }, filterBox,
-      h('button', { onclick: (e) => menuBelow(e.currentTarget, [
+      h('button', { disabled: readOnly, onclick: (e) => menuBelow(e.currentTarget, [
         { label: '上传文件…', kbd: 'Alt+U', onClick: () => uploadFiles() },
         { label: '上传文件夹…', onClick: () => uploadFolder() },
         { label: '上传 zip 并解压…', onClick: () => uploadZip() },
       ]) }, '上传 ▾'),
-      h('button', { onclick: (e) => menuBelow(e.currentTarget, [
+      h('button', { disabled: readOnly, onclick: (e) => menuBelow(e.currentTarget, [
         { label: '新建文件', kbd: 'Alt+N', onClick: newFile },
         { label: '新建文件夹', kbd: 'Alt+Shift+N', onClick: newFolder },
         'sep',
@@ -2826,8 +2919,9 @@ async function renderFilesTab(page) {
   // ---------- listing ----------
   const sortTh = (key, label, style) => h('th', {
     class: 'sortable', style,
+    'aria-sort': F.sort.key === key ? F.sort.dir > 0 ? 'ascending' : 'descending' : 'none',
     onclick: () => { F.sort = { key, dir: F.sort.key === key ? -F.sort.dir : 1 }; reload([...F.selected]); },
-  }, label, F.sort.key === key ? (F.sort.dir > 0 ? ' ↑' : ' ↓') : '');
+  }, label, sortIcon(F.sort.key === key ? F.sort.dir : 0));
   const rows = [];
   const status = h('div', { class: 'fs-status' });
   const paint = () => {
@@ -2867,7 +2961,7 @@ async function renderFilesTab(page) {
     h('tr', null, sortTh('name', '名称'), sortTh('size', '大小', { width: '110px' }), sortTh('modified', '最后修改', { width: '170px' })),
     F.path ? h('tr', { class: 'file-row', ondblclick: () => go(parentPath(F.path)) }, h('td', { class: 'name' }, h('span', { class: 'icon' }, '↩'), '..'), h('td'), h('td')) : null,
     visible.map((e, i) => {
-      const row = h('tr', { class: 'file-row', draggable: 'true' },
+      const row = h('tr', { class: 'file-row', draggable: !readOnly },
         h('td', { class: 'name', title: e.dir ? '' : e.size < EDIT_LIMIT ? '双击编辑' : '双击下载' }, h('span', { class: 'icon' }, e.dir ? '📁' : fileIcon(e.name)), e.name),
         h('td', { class: 'muted' }, e.dir ? '' : formatSize(e.size)),
         h('td', { class: 'muted' }, e.modified));
@@ -2888,6 +2982,7 @@ async function renderFilesTab(page) {
         itemMenu(ev.clientX, ev.clientY);
       });
       row.addEventListener('dragstart', (ev) => {
+        if (readOnly) { ev.preventDefault(); return; }
         if (!F.selected.has(e.name)) selectIndex(i);
         const paths = selectedPaths();
         S.fsDragPaths = paths;
@@ -2920,6 +3015,7 @@ async function renderFilesTab(page) {
   S.fsView = {
     root,
     paste: (event) => {
+      if (readOnly) return;
       pasteSerial++;
       const clipboard = event.clipboardData;
       const files = [...(clipboard?.files || [])];
@@ -2942,10 +3038,11 @@ async function renderFilesTab(page) {
       if (k === 'Home' || k === 'End') { e.preventDefault(); selectIndex(k === 'Home' ? 0 : visible.length - 1, e.shiftKey ? { shiftKey: true } : null); return; }
       if (k === 'Enter') { const sel = visible.filter((x) => F.selected.has(x.name)); if (sel.length === 1) { e.preventDefault(); openEntry(sel[0]); } return; }
       if (k === 'Backspace') { e.preventDefault(); if (F.path) go(parentPath(F.path)); return; }
-      if (k === 'Delete') { e.preventDefault(); remove(); return; }
-      if (k === 'F2') { e.preventDefault(); rename(); return; }
+      if (k === 'Delete') { e.preventDefault(); if (!readOnly) remove(); return; }
+      if (k === 'F2') { e.preventDefault(); if (!readOnly) rename(); return; }
       if (k === 'Escape') { if (F.selected.size) { F.selected = new Set(); paint(); } return; }
       if (ctrl && k.toLowerCase() === 'a') { e.preventDefault(); F.selected = new Set(visible.map((x) => x.name)); paint(); return; }
+      if (readOnly) return;
       if (ctrl && k.toLowerCase() === 'c') { e.preventDefault(); setClip('copy'); return; }
       if (ctrl && k.toLowerCase() === 'x') { e.preventDefault(); setClip('cut'); return; }
       if (ctrl && k.toLowerCase() === 'v') {
@@ -3130,13 +3227,14 @@ function fileIcon(name) {
 }
 
 async function openEditor(path, isNew, onSaved) {
+  const readOnly = !!S.contest.archived;
   let info = { content: '', encoding: 'utf-8', eol: 'lf', modified: '', modifiedMs: undefined, size: 0, editable: true };
   if (!isNew) {
     try { info = await api('GET', cpath() + '/files/download' + qs({ root: 'contest', path, text: 1 })); } catch (e) { return fail(e); }
     if (info.binary) return toast('二进制文件无法在线编辑', 'error');
     if (!info.editable) return toast('只能在线编辑 100 KiB 以下的文件', 'error');
   }
-  const area = h('textarea', { class: 'code-editor', spellcheck: 'false' });
+  const area = h('textarea', { class: 'code-editor', spellcheck: 'false', readonly: readOnly });
   area.value = info.content;
   let saved = info.content;
   const meta = h('span', { class: 'muted small-text' });
@@ -3150,6 +3248,7 @@ async function openEditor(path, isNew, onSaved) {
   const updateDirty = () => { dirtyMark.textContent = area.value !== saved ? '● 未保存' : ''; drawMeta(); };
   area.addEventListener('input', updateDirty);
   area.addEventListener('keydown', (e) => {
+    if (readOnly) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') e.preventDefault(); return; }
     if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       area.setRangeText('\t', area.selectionStart, area.selectionEnd, 'end');
@@ -3158,6 +3257,7 @@ async function openEditor(path, isNew, onSaved) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
   });
   const save = async (force = false) => {
+    if (readOnly) return false;
     try {
       const r = await api('PUT', cpath() + '/files/text', {
         root: 'contest', path, content: area.value, encoding: info.encoding, eol: info.eol,
@@ -3179,13 +3279,13 @@ async function openEditor(path, isNew, onSaved) {
   };
   const dlg = modal({
     title: h('span', { class: 'row' }, h('span', { class: 'mono' }, '/' + path), dirtyMark),
-    body: h('div', null, area, h('div', { class: 'row', style: { marginTop: '8px' } }, meta, h('span', { class: 'right muted small-text' }, 'Ctrl+S 保存 · Esc 关闭'))),
+    body: h('div', null, area, h('div', { class: 'row', style: { marginTop: '8px' } }, meta, h('span', { class: 'right muted small-text' }, readOnly ? '只读 · Esc 关闭' : 'Ctrl+S 保存 · Esc 关闭'))),
     buttons: [
       { label: '下载', onClick: () => { fsDownload(path, path.split('/').pop()); return false; } },
       { label: '关闭' },
-      { label: '保存', primary: true, onClick: async () => { await save(); return false; } },
+      ...(readOnly ? [] : [{ label: '保存', primary: true, onClick: async () => { await save(); return false; } }]),
     ],
-    beforeClose: async () => area.value === saved || confirmDlg('放弃未保存的修改？', '放弃'),
+    beforeClose: async () => readOnly || area.value === saved || confirmDlg('放弃未保存的修改？', '放弃'),
   });
   dlg.foot.firstChild.style.marginRight = 'auto';
   setTimeout(() => area.focus(), 50);
@@ -3344,7 +3444,7 @@ function judgeLine(e) {
       if (e.result === undefined) return h('div', { class: 'l3 muted' }, `${e.contestant} #${e.testCase + 1}.${e.subCase + 1}  已评测`);
       return h('div', { class: 'l3' }, h('span', { class: 'muted' }, e.contestant + ' '), `#${e.testCase + 1}.${e.subCase + 1}  `, resultTag(e.result),
         e.timeUsed >= 0 ? meta(`  ${e.timeUsed} ms`) : null, e.memoryUsed >= 0 ? meta(`  ${(e.memoryUsed / 1048576).toFixed(2)} MiB`) : null,
-        e.score > 0 ? h('span', { class: 'pts' }, `  +${e.score}`) : null);
+        e.score > 0 ? h('span', { class: 'pts' }, `  +${scoreText(e.score)}`) : null);
     case 'dependence': return h('div', { class: 'l3 muted' }, `#${e.testCase + 1} 依赖 #${e.dependence}：`, e.status >= 1000000 ? 'Pure' : e.status < 0 ? 'Lost' : (e.status / 10000).toFixed(1) + '%');
     case 'compile': return e.state === 0 || e.state === undefined ? null : h('div', { class: 'l3' }, h('span', { class: 'muted' }, (e.contestant || '') + ' '), h('span', { class: 'error-text' }, COMPILE_ABBR[e.state] + ' · ' + COMPILE_STATE[e.state]));
     case 'stopping': return h('div', { class: 'l1 error-text' }, '正在停止…');
@@ -3460,7 +3560,7 @@ function saveButton(onClick) {
 
 function renderGeneralSettings(el) {
   const s = { ...S.settings };
-  const num = (k, attrs = {}) => h('input', { type: 'number', value: s[k], ...attrs, oninput: (e) => { s[k] = +e.target.value; } });
+  const num = (k, attrs = {}) => h('input', { type: 'number', step: k === 'defaultFullScore' ? 'any' : 1, value: s[k], ...attrs, oninput: (e) => { s[k] = +e.target.value; } });
   const text = (k) => h('input', { type: 'text', value: Array.isArray(s[k]) ? s[k].join(';') : s[k], oninput: (e) => { s[k] = e.target.value; } });
   el.appendChild(h('h2', null, '常规'));
   el.appendChild(h('div', { class: 'section-title' }, '默认值'));
@@ -3733,7 +3833,8 @@ function renderApiDoc() {
     ['GET /api/public/contests?archived=0|1', '公开比赛列表，区分当前与已存档比赛'],
     ['GET /api/public/contests/{name}', '成绩表及该比赛的评测状态，不含代码、文件或服务器路径'],
     ['GET /api/public/contests/{name}/contestants/{who}', '结果详情，不含源码及编译输出'],
-    ['GET /api/public/contests/{name}/judge/status', '该公开比赛的评测进度，不含其他比赛或日志'],
+    ['GET /api/public/contests/{name}/judge/status?since=N', '该公开比赛的详细评测进度与安全事件，不含其他比赛、源码或队列'],
+    ['GET /api/public/contests/{name}/export?format=html|htm|csv', '下载公开成绩，不允许 save=1 或保存到服务器'],
   ];
   const o = location.origin;
   shell(h('div', { class: 'page' }, h('div', { class: 'narrow' }, h('div', { class: 'card' },

@@ -11,6 +11,7 @@
 //
 
 #include <QDialog>
+#include "base/LemonType.hpp"
 
 namespace Ui {
 	class AddTaskDialog;
@@ -22,14 +23,14 @@ class AddTaskDialog : public QDialog {
   public:
 	explicit AddTaskDialog(QWidget *parent = nullptr);
 	~AddTaskDialog();
-	void addTask(const QString &, int, int, int);
-	int getFullScore(int) const;
+	void addTask(const QString &, Score, int, int);
+	Score getFullScore(int) const;
 	int getTimeLimit(int) const;
 	int getMemoryLimit(int) const;
 
   private:
 	Ui::AddTaskDialog *ui;
-	QList<int> fullScore;
+	QList<Score> fullScore;
 	QList<int> timeLimit;
 	QList<int> memoryLimit;
 

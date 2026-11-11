@@ -17,6 +17,7 @@
 #include <QSet>
 #include <QString>
 #include <QVector>
+#include "base/LemonType.hpp"
 
 class Contest;
 class Settings;
@@ -74,7 +75,8 @@ class ContestManager : public QObject {
 	int markSourceChanged(const QString &who, const QStringList &rest);
 
 	// LemonServer's own contest properties, stored in <contest>/lemonserver.json next to the .cdf
-	// (the .cdf format stays LemonLime's). The functions without a name are about the current contest.
+	// (integer CDF stays compatible; fractional scores use version 1.1). The functions without a name
+	// are about the current contest.
 	static constexpr const char *kPropertiesFile = "lemonserver.json";
 	QString currentPropertiesPath() const;
 	// down.zip of the contest, relative to the contest folder (empty = not set).
@@ -85,6 +87,7 @@ class ContestManager : public QObject {
 	bool isPublic(const QString &name) const;
 	bool setArchived(bool archived, QString *error);
 	bool setPublic(bool visible, QString *error);
+	quint64 revision(const QString &name = QString()) const;
 
 	// ---------------- judging queue ----------------
 	// Queue a judging request of the current contest ({"mode", "items", "compileStates", "resultStates",
@@ -110,7 +113,7 @@ class ContestManager : public QObject {
 	QJsonObject judgeStatus(qint64 since) const;
 
   private slots:
-	void onSingleCaseFinished(const QString &contestant, int progress, int x, int y, int result, int score,
+	void onSingleCaseFinished(const QString &contestant, int progress, int x, int y, int result, Score score,
 	                          int timeUsed, qint64 memoryUsed);
 	void onSubtaskDependenceFinished(int x, int y, int status);
 	void onTaskJudgingStarted(const QString &contestant, const QString &taskName);
@@ -124,7 +127,10 @@ class ContestManager : public QObject {
 		QString cdfFile;
 		QJsonObject properties;
 		QDateTime lastUsed;
+		bool dirty = false;
+		quint64 revision = 0;
 	};
+	struct ListSnapshot { qint64 size = -1; QDateTime modified; QJsonObject value; };
 	struct Job {
 		qint64 id = 0;
 		QString contest;
@@ -143,6 +149,7 @@ class ContestManager : public QObject {
 	void evictIdleContests(const QString &keep);
 	void connectContest(Contest *c);
 	bool saveContest(const QString &name, QString *error = nullptr);
+	void touch(const QString &name, bool dirty = true);
 	void pushEvent(QJsonObject event);
 	void scheduleNext();
 	void startNext();
@@ -156,6 +163,8 @@ class ContestManager : public QObject {
 	Settings *settings;
 	ServerConfig *config;
 	QMap<QString, Loaded> loaded;
+	mutable QMap<QString, ListSnapshot> listSnapshots;
+	quint64 nextRevision = 1;
 	Contest *contest = nullptr; // current contest
 	QString contestName;
 

@@ -121,7 +121,7 @@ auto Settings::openSettingsStore() -> std::unique_ptr<QSettings> {
 	return std::make_unique<QSettings>(settingsFile, QSettings::IniFormat);
 }
 
-auto Settings::getDefaultFullScore() const -> int { return defaultFullScore; }
+auto Settings::getDefaultFullScore() const -> Score { return defaultFullScore; }
 
 auto Settings::getDefaultTimeLimit() const -> int { return defaultTimeLimit; }
 
@@ -165,7 +165,7 @@ auto Settings::getSplashTime() const -> int { return splashTime; }
 
 Qt::ColorScheme Settings::getColorScheme() const { return colorScheme; }
 
-void Settings::setDefaultFullScore(int score) {
+void Settings::setDefaultFullScore(Score score) {
 	defaultFullScore = score;
 	DEBUG("Set Default Full Score to " + QString::number(score));
 }
@@ -567,7 +567,8 @@ void Settings::loadSettings() {
 	QSettings &settings = *settingsStore;
 	uiLanguage = settings.value("UiLanguage", QLocale::system().name()).toString();
 	settings.beginGroup("GeneralSettings");
-	defaultFullScore = settings.value("DefaultFullScore", 10).toInt();
+	defaultFullScore = settings.value("DefaultFullScore", 10).toDouble();
+	if (!qIsFinite(defaultFullScore) || defaultFullScore < 0 || defaultFullScore > upperBoundForFullScore()) defaultFullScore = 10;
 	defaultTimeLimit = settings.value("DefaultTimeLimit", 1000).toInt();
 	defaultExtraTimeRatio = settings.value("DefaultExtraTimeRatio", 0.1).toDouble();
 	defaultMemoryLimit = settings.value("DefaultMemoryLimit", 512).toInt();

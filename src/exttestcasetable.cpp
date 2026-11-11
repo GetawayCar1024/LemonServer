@@ -100,7 +100,7 @@ void ExtTestCaseTable::refreshTask(Task *nowTask) {
 	for (int i = 0; i < testCases.size(); i++) {
 		auto *nowsub = editTask->getTestCase(i);
 
-		int score = nowsub->getFullScore();
+		Score score = nowsub->getFullScore();
 		auto inputs = nowsub->getInputFiles();
 		auto outputs = nowsub->getOutputFiles();
 		auto times = nowsub->getTimeLimit();

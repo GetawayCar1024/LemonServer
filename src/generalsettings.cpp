@@ -31,7 +31,7 @@ GeneralSettings::GeneralSettings(QWidget *parent) : QWidget(parent), ui(new Ui::
 		ui->languageComboBox->setToolTip("Cannot find any language providers.");
 	}
 
-	ui->defaultFullScore->setValidator(new QIntValidator(1, Settings::upperBoundForFullScore(), this));
+	ui->defaultFullScore->setValidator(new QDoubleValidator(0, Settings::upperBoundForFullScore(), 15, this));
 	ui->defaultTimeLimit->setValidator(new QIntValidator(1, Settings::upperBoundForTimeLimit(), this));
 	ui->defaultExtraTimeRatio->setValidator(
 	    new QDoubleValidator(0.0, Settings::upperBoundForExtraTimeRatio(), 6, this));
@@ -141,7 +141,7 @@ auto GeneralSettings::checkValid() -> bool {
 }
 
 void GeneralSettings::defaultFullScoreChanged(const QString &text) {
-	editSettings->setDefaultFullScore(text.toInt());
+	editSettings->setDefaultFullScore(text.toDouble());
 }
 
 void GeneralSettings::defaultTimeLimitChanged(const QString &text) {

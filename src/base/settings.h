@@ -79,7 +79,7 @@ class Settings {
   public:
 	explicit Settings();
 
-	int getDefaultFullScore() const;
+	Score getDefaultFullScore() const;
 	int getDefaultTimeLimit() const;
 	int getDefaultMemoryLimit() const;
 	int getCompileTimeLimit() const;
@@ -101,7 +101,7 @@ class Settings {
 	int getSplashTime() const;
 	Qt::ColorScheme getColorScheme() const;
 
-	void setDefaultFullScore(int);
+	void setDefaultFullScore(Score);
 	void setDefaultTimeLimit(int);
 	void setDefaultExtraTimeRatio(double);
 	void setDefaultMemoryLimit(int);
@@ -158,7 +158,7 @@ class Settings {
 	static std::unique_ptr<QSettings> openSettingsStore();
 
 	QList<Compiler *> compilerList;
-	int defaultFullScore{};
+	Score defaultFullScore{};
 	int defaultTimeLimit{};
 	int defaultMemoryLimit{};
 	int compileTimeLimit{};

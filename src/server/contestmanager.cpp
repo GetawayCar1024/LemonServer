@@ -27,6 +27,7 @@
 #include <QSet>
 #include <QTimer>
 #include <algorithm>
+#include <cmath>
 
 #define LEMON_MODULE_NAME "ContestManager"
 
@@ -154,18 +155,31 @@ QJsonArray ContestManager::listContests() const {
 		                 {"archived", props["archived"].toBool(false)},
 		                 {"downZip", props["downZip"].toString()}};
 		QFile f(cdf);
-		if (f.open(QFile::ReadOnly)) {
+		const QFileInfo info(cdf);
+		if (loaded.contains(name)) {
+			const auto *c = loaded.value(name).contest;
+			item["title"] = c->getContestTitle();
+			item["tasks"] = int(c->getTaskList().size());
+			item["contestants"] = int(c->getContestantList().size());
+		} else if (listSnapshots.contains(cdf) && listSnapshots[cdf].size == info.size() && listSnapshots[cdf].modified == info.lastModified()) {
+			const auto summary = listSnapshots[cdf].value;
+			for (auto it = summary.begin(); it != summary.end(); ++it) item[it.key()] = it.value();
+		} else if (f.open(QFile::ReadOnly)) {
+			QJsonObject summary;
 			char first = 0;
 			f.peek(&first, 1);
 			if (first == '{') {
 				const auto obj = QJsonDocument::fromJson(f.readAll()).object();
-				item["title"] = obj["contestTitle"].toString();
-				item["tasks"] = obj["tasks"].toArray().size();
-				item["contestants"] = obj["contestants"].toArray().size();
+				summary["title"] = obj["contestTitle"].toString();
+				summary["tasks"] = obj["tasks"].toArray().size();
+				summary["contestants"] = obj["contestants"].toArray().size();
 			} else {
-				item["title"] = name;
-				item["legacyFormat"] = true;
+				summary["title"] = name;
+				summary["legacyFormat"] = true;
 			}
+			if (listSnapshots.size() > 4096) listSnapshots.clear();
+			listSnapshots[cdf] = {info.size(), info.lastModified(), summary};
+			for (auto it = summary.begin(); it != summary.end(); ++it) item[it.key()] = it.value();
 		}
 		arr.append(item);
 	}
@@ -236,6 +250,7 @@ bool ContestManager::deleteContest(const QString &requested, QString *error) {
 		*error = tr("Cannot remove contest folder");
 		return false;
 	}
+	++nextRevision;
 	return true;
 }
 
@@ -465,7 +480,7 @@ Contest *ContestManager::loadContest(const QString &filePath, QString *error) {
 void ContestManager::addLoaded(const QString &name, Contest *c, const QString &cdfFile) {
 	c->setContestDirectory(contestDir(name));
 	connectContest(c);
-	loaded.insert(name, Loaded{c, cdfFile, readProperties(contestDir(name)), QDateTime::currentDateTimeUtc()});
+	loaded.insert(name, Loaded{c, cdfFile, readProperties(contestDir(name)), QDateTime::currentDateTimeUtc(), false, nextRevision++});
 	evictIdleContests(name);
 }
 
@@ -497,6 +512,9 @@ void ContestManager::evictIdleContests(const QString &keep) {
 			}
 		}
 		if (oldest.isEmpty())
+			return;
+		// A failed disk write must not evict the only up-to-date copy of the results.
+		if (!saveContest(oldest))
 			return;
 		unload(oldest);
 	}
@@ -541,6 +559,7 @@ void ContestManager::closeAll() {
 	for (auto &l : loaded)
 		delete l.contest;
 	loaded.clear();
+	++nextRevision;
 	contest = nullptr;
 	contestName.clear();
 }
@@ -597,10 +616,11 @@ bool ContestManager::setArchived(bool archived, QString *error) {
 	if (! contest) { *error = tr("No contest yet"); return false; }
 	if (isBusy(contestName)) { *error = tr("This contest is being judged or waiting to be judged"); return false; }
 	if (archived == isArchived(contestName)) return true;
-	if (archived && ! save(error)) return false;
+	if (archived && ! saveContest(contestName, error)) return false;
 	auto next = props(); next["archived"] = archived;
 	if (! saveProperties(currentDir(), next, error)) return false;
 	loaded[contestName].properties = next;
+	touch(contestName, false);
 	return true;
 }
 
@@ -610,6 +630,7 @@ bool ContestManager::setPublic(bool visible, QString *error) {
 	auto next = props(); next["public"] = visible;
 	if (! saveProperties(currentDir(), next, error)) return false;
 	loaded[contestName].properties = next;
+	touch(contestName, false);
 	return true;
 }
 
@@ -650,15 +671,32 @@ QJsonObject ContestManager::propertiesJson() const {
 	return {{"downZip", down}, {"public", isPublic(contestName)}, {"archived", isArchived(contestName)}};
 }
 
-bool ContestManager::save(QString *error) { return contest && saveContest(contestName, error); }
+void ContestManager::touch(const QString &name, bool dirty) {
+	auto it = loaded.find(name);
+	if (it == loaded.end()) return;
+	it->dirty |= dirty;
+	it->revision = nextRevision++;
+}
+
+quint64 ContestManager::revision(const QString &name) const {
+	if (name.isEmpty()) return nextRevision;
+	return loaded.value(canonicalName(name)).revision;
+}
+
+bool ContestManager::save(QString *error) {
+	if (!contest) return false;
+	touch(contestName);
+	return saveContest(contestName, error);
+}
 
 bool ContestManager::saveContest(const QString &name, QString *error) {
 	// LemonLime::saveContest()
-	const auto it = loaded.constFind(name);
-	if (it == loaded.cend())
+	const auto it = loaded.find(name);
+	if (it == loaded.end())
 		return false;
 	if (it->properties["archived"].toBool(false))
 		return true; // Reads, eviction and shutdown must not rewrite an archived CDF.
+	if (!it->dirty) return true;
 	QSaveFile file(QDir(contestDir(name)).absoluteFilePath(it->cdfFile));
 	if (! file.open(QFile::WriteOnly)) {
 		if (error)
@@ -668,13 +706,14 @@ bool ContestManager::saveContest(const QString &name, QString *error) {
 	}
 	QJsonObject out;
 	it->contest->writeToJson(out);
-	file.write(QJsonDocument(out).toJson(QJsonDocument::Compact));
-	if (! file.commit()) {
+	const auto bytes = QJsonDocument(out).toJson(QJsonDocument::Compact);
+	if (file.write(bytes) != bytes.size() || ! file.commit()) {
 		if (error)
 			*error = tr("Cannot write file %1").arg(it->cdfFile);
 		return false;
 	}
 	lastSaved[name] = QDateTime::currentDateTimeUtc();
+	it->dirty = false;
 	return true;
 }
 
@@ -744,6 +783,10 @@ int ContestManager::addTasks(const QJsonArray &requested, QString *error) {
 	const auto candidates = scanNewTasks();
 	for (const auto &entry : requested) {
 		const auto request = entry.toObject();
+		if (request.contains("fullScore") && (!request["fullScore"].isDouble() || !qIsFinite(request["fullScore"].toDouble()) || request["fullScore"].toDouble() < 0 || request["fullScore"].toDouble() > Settings::upperBoundForFullScore())) {
+			if (error) *error = "fullScore must be a finite nonnegative number";
+			return 0;
+		}
 		if (request.contains("sourceFileName") && (!LemonServerJson::isPortableTaskFileName(request["sourceFileName"].toString()) || request["sourceFileName"].toString().size() > 64)) {
 			if (error) *error = "sourceFileName: use an ASCII file name of at most 64 characters. The display title may contain Chinese.";
 			return 0;
@@ -759,7 +802,7 @@ int ContestManager::addTasks(const QJsonArray &requested, QString *error) {
 			const QString title = cand["name"].toString();
 			const QString source = req.contains("sourceFileName") ? req["sourceFileName"].toString() : cand["sourceFileName"].toString();
 			const auto testCases = cand["testCases"].toArray();
-			const int sumScore = req.contains("fullScore") ? req["fullScore"].toInt() : cand["fullScore"].toInt();
+			const Score sumScore = req.contains("fullScore") ? req["fullScore"].toDouble() : cand["fullScore"].toDouble();
 			const int timeLimit =
 			    req.contains("timeLimit") ? req["timeLimit"].toInt() : settings->getDefaultTimeLimit();
 			const int memoryLimit =
@@ -774,11 +817,12 @@ int ContestManager::addTasks(const QJsonArray &requested, QString *error) {
 			newTask->setAnswerFileExtension(settings->getDefaultOutputFileExtension());
 			contest->addTask(newTask);
 			const int n = int(testCases.size());
-			int scorePer = sumScore / n;
-			int scoreLos = sumScore - scorePer * n;
+			const bool whole = std::floor(sumScore) == sumScore;
+			const Score scorePer = whole ? std::floor(sumScore / n) : sumScore / n;
+			const Score scoreLos = sumScore - scorePer * n;
 			for (int i = 0; i < n; i++) {
 				auto *newTestCase = new TestCase;
-				newTestCase->setFullScore(scorePer + static_cast<int>(i < scoreLos));
+				newTestCase->setFullScore(whole ? scorePer + static_cast<int>(i < scoreLos) : i + 1 == n ? sumScore - scorePer * i : scorePer);
 				newTestCase->setTimeLimit(timeLimit);
 				newTestCase->setMemoryLimit(memoryLimit);
 				const auto pair = testCases[i].toArray();
@@ -1269,6 +1313,7 @@ void ContestManager::startNext() {
 		if (c) {
 			if (job.request["refresh"].toBool()) {
 				c->refreshContestantList();
+				touch(job.contest);
 				saveContest(job.contest);
 			}
 			QMap<QString, QVector<int>> mapping;
@@ -1333,6 +1378,7 @@ void ContestManager::runJudge(const QList<std::pair<QString, QVector<int>>> &lis
 	}
 	changedWhileJudging.clear();
 	judgeFinished = QDateTime::currentDateTime();
+	touch(running.contest);
 	saveContest(running.contest);
 	pushEvent({{"type", "finished"},
 	           {"stopped", stopRequested},
@@ -1362,9 +1408,8 @@ QJsonObject ContestManager::queueJson() const {
 
 QJsonObject ContestManager::judgeStatus(qint64 since) const {
 	QJsonArray ev;
-	for (const auto &e : events)
-		if (e["id"].toInteger() > since)
-			ev.append(e);
+	const auto first = std::upper_bound(events.cbegin(), events.cend(), since, [](qint64 id, const QJsonObject &event) { return id < event["id"].toInteger(); });
+	for (auto it = first; it != events.cend(); ++it) ev.append(*it);
 	QJsonArray waiting;
 	for (int i = 0; i < queue.size(); i++)
 		waiting.append(jobJson(queue[i], i + 1));
@@ -1378,7 +1423,7 @@ QJsonObject ContestManager::judgeStatus(qint64 since) const {
 	        {"progressMaximum", double(progressMaximum)},
 	        {"tasksDone", tasksDone},
 	        {"tasksTotal", tasksTotal},
-	        {"started", judgeStarted.isValid() ? judgeStarted.toString(Qt::ISODate) : QString()},
+	        {"started", judgeStarted.isValid() ? judgeStarted.toString(Qt::ISODateWithMs) : QString()},
 	        {"finished", judgeFinished.isValid() ? judgeFinished.toString(Qt::ISODate) : QString()},
 	        {"queue", waiting},
 	        {"lastEventId", double(nextEventId - 1)},
@@ -1386,6 +1431,7 @@ QJsonObject ContestManager::judgeStatus(qint64 since) const {
 }
 
 void ContestManager::pushEvent(QJsonObject event) {
+	touch(running.contest, false);
 	event["id"] = double(nextEventId++);
 	event["time"] = QDateTime::currentDateTime().toString("hh:mm:ss");
 	events.append(event);
@@ -1394,7 +1440,7 @@ void ContestManager::pushEvent(QJsonObject event) {
 }
 
 void ContestManager::onSingleCaseFinished(const QString &contestant, int progress, int x, int y, int result,
-                                          int score, int timeUsed, qint64 memoryUsed) {
+                                          Score score, int timeUsed, qint64 memoryUsed) {
 	progressValue += progress;
 	pushEvent({{"type", "case"},
 	           {"contestant", contestant},
@@ -1419,6 +1465,7 @@ void ContestManager::onCompileFinished(const QString &contestant, const QString 
 }
 
 void ContestManager::onTaskJudgingFinished() {
+	touch(running.contest);
 	tasksDone++;
 	pushEvent({{"type", "taskFinished"}, {"done", tasksDone}, {"total", tasksTotal}});
 	// Persist intermediate results like an autosave: at most every 2 s, and always within 2 s of a result.
@@ -1435,4 +1482,4 @@ void ContestManager::onTaskJudgingFinished() {
 	}
 }
 
-void ContestManager::onCompileError(int progress, int) { progressValue += progress; }
+void ContestManager::onCompileError(int progress, int) { progressValue += progress; touch(running.contest, false); }

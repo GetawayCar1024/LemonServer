@@ -26,7 +26,7 @@ class StatisticsUtil {
   public:
 	static QString generateHtml(Contest *);
 	static bool checkValid(QList<Task *>, const QList<Contestant *> &);
-	static QString getScoreNormalChart(const QMap<int, int> &, int, int);
-	static QString getTestcaseScoreChart(QList<TestCase *>, QList<QList<QList<int>>>,
+	static QString getScoreNormalChart(const QMap<Score, int> &, int, Score);
+	static QString getTestcaseScoreChart(QList<TestCase *>, QList<QList<QList<Score>>>,
 	                                     QList<QList<QList<ResultState>>>);
 };

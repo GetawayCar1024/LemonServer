@@ -9,6 +9,7 @@
 //
 
 #include <base/LemonBase.hpp>
+#include "base/LemonType.hpp"
 //
 #include <QJsonObject>
 
@@ -19,7 +20,7 @@ namespace Lemon::base::config {
 	class LemonConfigJudge {
 	  private:
 		QList<Compiler *> compilerList;
-		int defaultFullScore{};
+		Score defaultFullScore{};
 		int defaultTimeLimit{};
 		int defaultMemoryLimit{};
 		int compileTimeLimit{};

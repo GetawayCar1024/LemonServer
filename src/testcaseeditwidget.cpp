@@ -26,7 +26,7 @@ TestCaseEditWidget::TestCaseEditWidget(QWidget *parent) : QWidget(parent), ui(ne
 	QValidator *subtaskDependenceValidator =
 	    new QRegularExpressionValidator(QRegularExpression("[0-9,]+$"), ui->subtaskDependecne);
 	ui->subtaskDependecne->setValidator(subtaskDependenceValidator);
-	ui->fullScore->setValidator(new QIntValidator(1, Settings::upperBoundForFullScore(), this));
+	ui->fullScore->setValidator(new QDoubleValidator(0, Settings::upperBoundForFullScore(), 15, this));
 	ui->timeLimit->setValidator(new QIntValidator(1, Settings::upperBoundForTimeLimit(), this));
 	ui->memoryLimit->setValidator(new QIntValidator(1, Settings::upperBoundForMemoryLimit(), this));
 	ui->fileList->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
@@ -197,7 +197,7 @@ void TestCaseEditWidget::fullScoreChanged(const QString &text) {
 	if (! editTestCase)
 		return;
 
-	editTestCase->setFullScore(text.toInt());
+	editTestCase->setFullScore(text.toDouble());
 }
 
 void TestCaseEditWidget::timeLimitChanged(const QString &text) {

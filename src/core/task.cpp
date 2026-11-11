@@ -229,8 +229,8 @@ auto Task::getTotalTimeLimit() const -> int {
 	return total;
 }
 
-auto Task::getTotalScore() const -> int {
-	int total = 0;
+auto Task::getTotalScore() const -> Score {
+	Score total = 0;
 
 	for (auto *i : testCaseList) {
 		total += i->getFullScore();
@@ -374,8 +374,10 @@ int Task::readFromJson(const QJsonObject &in) {
 	READ_JSON(in, testCases);
 	for (const auto &testCase : testCases) {
 		auto *newTestCase = new TestCase();
-		if (newTestCase->readFromJson(testCase.toObject()) == -1)
+		if (newTestCase->readFromJson(testCase.toObject()) == -1) {
+			delete newTestCase;
 			return -1;
+		}
 		newTestCase->setIndex(testCaseList.size() + 1);
 		testCaseList.append(newTestCase);
 	}

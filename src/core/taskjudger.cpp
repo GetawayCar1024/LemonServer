@@ -379,7 +379,7 @@ int TaskJudger::judge() {
 	for (int i = 0; i < task->getTestCaseList().size(); i++) {
 		timeUsed.append(QList<int>());
 		memoryUsed.append(QList<qint64>());
-		score.append(QList<int>());
+		score.append(QList<Score>());
 		result.append(QList<ResultState>());
 		overallStatus.append(maxDependValue);
 		message.append(QStringList());
@@ -546,7 +546,7 @@ int TaskJudger::judge() {
 			                                         caseJudger->getFullScore()));
 			message[i][j] = caseJudger->getMessage();
 			caseJudger.reset();
-			int nowScore = score[i][j];
+			Score nowScore = score[i][j];
 
 			if (j + 1 == task->getTestCase(i)->getInputFiles().size()) {
 				for (int k = 0; k < j; k++)

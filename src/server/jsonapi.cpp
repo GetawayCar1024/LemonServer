@@ -150,6 +150,10 @@ namespace LemonServerJson {
 			const auto arr = obj["testCases"].toArray();
 			for (int i = 0; i < arr.size(); i++) {
 				const auto tc = arr[i].toObject();
+				if (tc.contains("fullScore") && (!tc["fullScore"].isDouble() || !qIsFinite(tc["fullScore"].toDouble()) || tc["fullScore"].toDouble() < 0 || tc["fullScore"].toDouble() > Settings::upperBoundForFullScore())) {
+					*error = QString("test case #%1: fullScore must be a finite nonnegative number").arg(i + 1);
+					return false;
+				}
 				if (tc["inputFiles"].toArray().size() != tc["outputFiles"].toArray().size()) {
 					*error = QString("test case #%1: inputFiles and outputFiles differ in length").arg(i + 1);
 					return false;
@@ -214,8 +218,7 @@ namespace LemonServerJson {
 			for (const auto &v : obj["testCases"].toArray()) {
 				const auto o = v.toObject();
 				auto *tc = new TestCase;
-				tc->setFullScore(qBound(0, o["fullScore"].toInt(settings->getDefaultFullScore()),
-				                        Settings::upperBoundForFullScore()));
+				tc->setFullScore(o["fullScore"].toDouble(settings->getDefaultFullScore()));
 				tc->setTimeLimit(qBound(0, o["timeLimit"].toInt(settings->getDefaultTimeLimit()),
 				                        Settings::upperBoundForTimeLimit()));
 				tc->setMemoryLimit(qBound(0, o["memoryLimit"].toInt(settings->getDefaultMemoryLimit()),
@@ -401,7 +404,7 @@ namespace LemonServerJson {
 
 	void applySettingsJson(Settings *s, const QJsonObject &o) {
 		if (o.contains("defaultFullScore"))
-			s->setDefaultFullScore(qBound(0, o["defaultFullScore"].toInt(), Settings::upperBoundForFullScore()));
+			s->setDefaultFullScore(qBound(0.0, o["defaultFullScore"].toDouble(), double(Settings::upperBoundForFullScore())));
 		if (o.contains("defaultTimeLimit"))
 			s->setDefaultTimeLimit(qBound(1, o["defaultTimeLimit"].toInt(), Settings::upperBoundForTimeLimit()));
 		if (o.contains("defaultMemoryLimit"))

@@ -8,7 +8,8 @@
   const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
   const object = value => value && typeof value === 'object' && !Array.isArray(value);
   const maximum = 2147483647;
-  const split = (total, count) => Array.from({ length: count }, (_, i) => Math.floor(total / count) + (i >= count - total % count ? 1 : 0));
+  const split = (total, count) => Array.from({ length: count }, (_, i) => Number.isInteger(total)
+    ? Math.floor(total / count) + (i >= count - total % count ? 1 : 0) : i + 1 === count ? total - (total / count) * i : total / count);
   const safePath = value => typeof value === 'string' && value.length > 0 && !/^[\\/]|^[A-Za-z]:|[\x00-\x1f<>:"|?*]/.test(value)
     && !value.replace(/\\/g, '/').split('/').some(part => part === '..' || part === '.');
   const portable = value => typeof value === 'string' && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/.test(value)
@@ -58,7 +59,7 @@
     };
     const score = (value, label) => {
       if (value === undefined) return undefined;
-      if (!Number.isSafeInteger(value) || value < 0 || value > maximum) { warn(label, '分值须为非负整数'); return undefined; }
+      if (!Number.isFinite(value) || value < 0 || value > maximum) { warn(label, '分值须为非负数'); return undefined; }
       if (!value) { warn(label, 'Hydro 的零分值表示使用默认值'); return undefined; }
       return value;
     };

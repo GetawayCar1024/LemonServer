@@ -35,10 +35,9 @@ namespace TestlibTools {
 		    "static bool __lemonserver_lemon_arguments(int argc, char *argv[]) {\n"
 		    "    if (argc != 7) return false;\n"
 		    "    for (int i = 1; i < argc; i++) if (argv[i][0] == '-' && argv[i][1] == '-') return false;\n"
-		    "    const char *p = argv[4];\n"
-		    "    if (!*p) return false;\n"
-		    "    for (; *p; ++p) if (*p < '0' || *p > '9') return false;\n"
-		    "    return true;\n"
+		    "    char *end = nullptr;\n"
+		    "    const double score = std::strtod(argv[4], &end);\n"
+		    "    return end != argv[4] && !*end && std::isfinite(score) && score >= 0;\n"
 		    "}\n" +
 		    entry +
 		    "    if (__lemonserver_lemon_arguments(argc, argv)) {\n"
@@ -56,16 +55,19 @@ namespace TestlibTools {
 			header.replace(flag, flag + "static bool __lemonserver_testlib_cmd = false;\n");
 			header.replace(entry, lemonEntry);
 			header.replace(partial, "        } else if (isPartial)\n"
-			                        "            fprintf(scoreFile, \"%d\", __lemonserver_testlib_cmd ? pctype * perfectScore / 100 : pctype);\n");
-			header.replace(points, "            if (__lemonserver_testlib_cmd) fprintf(scoreFile, \"%d\", int(partialScore));\n"
-			                       "            else fprintf(scoreFile, \"%.0f\", partialScore);\n");
+			                        "            fprintf(scoreFile, \"%.17g\", __lemonserver_testlib_cmd ? pctype * perfectScore / 100 : double(pctype));\n");
+			header.replace(points, "            fprintf(scoreFile, \"%.17g\", partialScore);\n");
+			header.replace("int perfectScore;", "double perfectScore;");
+			header.replace("int _perfectScore,", "double _perfectScore,");
+			header.replace("atoi(argv[4])", "std::strtod(argv[4], nullptr)");
+			header.replace("fprintf(scoreFile, \"%d\", perfectScore);", "fprintf(scoreFile, \"%.17g\", perfectScore);");
 			header.replace(okScore, "    if (localJudger) {\n"
 			                        "        if (__lemonserver_testlib_cmd && result == _fail)\n"
 			                        "            fprintf(scoreFile, \"-1\");\n"
 			                        "        else if (result == _ok)\n");
 		}
 		// The bundled revision uses fixed-width integer types without including their header.
-		return QByteArray("#include <cstdint>\n") + header;
+		return QByteArray("#include <cstdint>\n#include <cmath>\n#include <cstdlib>\n") + header;
 	}
 
 	QStringList templateNames() {

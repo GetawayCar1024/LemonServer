@@ -63,10 +63,10 @@ void ExportUtil::exportXls(QWidget *widget, Contest *contest, const QString &fil
 	QApplication::setOverrideCursor(Qt::WaitCursor);
 	QList<Contestant *> contestantList = contest->getContestantList();
 	QList<Task *> taskList = contest->getTaskList();
-	QList<std::pair<int, QString>> sortList;
+	QList<std::pair<Score, QString>> sortList;
 
 	for (int i = 0; i < contestantList.size(); i++) {
-		int totalScore = contestantList[i]->getTotalScore();
+		Score totalScore = contestantList[i]->getTotalScore();
 
 		if (totalScore != -1) {
 			sortList.append(std::make_pair(-totalScore, contestantList[i]->getContestantName()));
@@ -115,7 +115,7 @@ void ExportUtil::exportXls(QWidget *widget, Contest *contest, const QString &fil
 		sheet->querySubObject("Cells(int, int)", 2 + i, 2)->setProperty("Value", sortList[i].second);
 
 		for (int j = 0; j < taskList.size(); j++) {
-			int score = contestant->getTaskScore(j);
+			Score score = contestant->getTaskScore(j);
 
 			if (score != -1) {
 				sheet->querySubObject("Cells(int, int)", 2 + i, 3 + j)->setProperty("Value", score);
@@ -124,7 +124,7 @@ void ExportUtil::exportXls(QWidget *widget, Contest *contest, const QString &fil
 			}
 		}
 
-		int score = contestant->getTotalScore();
+		Score score = contestant->getTotalScore();
 
 		if (score != -1) {
 			sheet->querySubObject("Cells(int, int)", 2 + i, 3 + taskList.size())->setProperty("Value", score);

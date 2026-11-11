@@ -15,7 +15,7 @@
 
 TestCase::TestCase() {}
 
-auto TestCase::getFullScore() const -> int { return fullScore; }
+auto TestCase::getFullScore() const -> Score { return fullScore; }
 
 auto TestCase::getTimeLimit() const -> int { return timeLimit; }
 
@@ -29,7 +29,7 @@ auto TestCase::getDependenceSubtask() const -> const QList<int> & { return depen
 
 void TestCase::setIndex(int ind) { index = ind; }
 
-void TestCase::setFullScore(int score) { fullScore = score; }
+void TestCase::setFullScore(Score score) { fullScore = score; }
 
 void TestCase::setTimeLimit(int limit) { timeLimit = limit; }
 
@@ -127,7 +127,8 @@ int TestCase::writeToJson(QJsonObject &out) const {
 }
 
 int TestCase::readFromJson(const QJsonObject &in) {
-	READ_JSON(in, fullScore);
+	if (in.contains("fullScore") && READ_JSON(in, fullScore) != 0) return -1;
+	if (!qIsFinite(fullScore) || fullScore < 0 || fullScore > Settings::upperBoundForFullScore()) return -1;
 	READ_JSON(in, timeLimit);
 	READ_JSON(in, memoryLimit);
 
@@ -151,7 +152,9 @@ int TestCase::readFromJson(const QJsonObject &in) {
 	return 0;
 }
 void TestCase::readFromStream(QDataStream &in) {
-	in >> fullScore;
+	int oldScore = 0;
+	in >> oldScore;
+	fullScore = oldScore;
 	in >> timeLimit;
 	in >> memoryLimit;
 	QStringList _inputFiles;

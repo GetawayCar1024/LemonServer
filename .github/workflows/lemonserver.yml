@@ -53,7 +53,7 @@ jobs:
             -DBUILD_GUI=OFF -DBUILD_LEMON_TESTS=OFF -DEMBED_DOCS=OFF -DENABLE_LTO=OFF \
             -DLEMON_COMPAT_REFERENCE_DIR="${{ github.workspace }}/build/reference" \
             -DLEMON_BUILD_INFO="LemonServer for Windows" -DLEMON_BUILD_EXTRA_INFO="GitHub Actions ${{ github.sha }}"
-          cmake --build build --target LemonServer judge-compat-current judge-compat-reference --parallel
+          cmake --build build --target LemonServer judge-compat-current judge-compat-reference score-persistence-test --parallel
 
       - name: Package
         shell: pwsh
@@ -102,6 +102,16 @@ jobs:
           node --test tests/server/autosave_test.mjs tests/server/hydro_import_test.mjs tests/server/result_order_test.mjs tests/server/upload_test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/judging-compat/compare.py build/tests/judging-compat/judge-compat-current.exe build/tests/judging-compat/judge-compat-reference.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & build/tests/judging-compat/score-persistence-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/fractional_scores_test.mjs "$env:PKG\LemonServer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/public_features_test.mjs "$env:PKG\LemonServer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/performance_test.mjs "$env:PKG\LemonServer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/workflow_ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/server/task_paths_test.py "$env:PKG\LemonServer.exe" --embedded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -170,7 +180,7 @@ jobs:
             -DBUILD_GUI=OFF -DBUILD_LEMON_TESTS=OFF -DEMBED_DOCS=OFF -DENABLE_LTO=OFF \
             -DLEMON_COMPAT_REFERENCE_DIR="$PWD/build/reference" \
             -DLEMON_BUILD_INFO="LemonServer for Ubuntu" -DLEMON_BUILD_EXTRA_INFO="GitHub Actions ${{ github.sha }}"
-          cmake --build build --target LemonServer judge-compat-current judge-compat-reference --parallel
+          cmake --build build --target LemonServer judge-compat-current judge-compat-reference score-persistence-test --parallel
 
       - name: Watcher test
         run: bash tests/watcher/run.sh
@@ -183,6 +193,11 @@ jobs:
         run: |
           node --test tests/server/autosave_test.mjs tests/server/hydro_import_test.mjs tests/server/result_order_test.mjs tests/server/upload_test.mjs
           python3 tests/judging-compat/compare.py "$PWD/build/tests/judging-compat/judge-compat-current" "$PWD/build/tests/judging-compat/judge-compat-reference"
+          build/tests/judging-compat/score-persistence-test
+          node tests/server/fractional_scores_test.mjs "$PWD/build/LemonServer"
+          node tests/server/public_features_test.mjs "$PWD/build/LemonServer"
+          node tests/server/performance_test.mjs "$PWD/build/LemonServer"
+          node tests/server/workflow_ui_test.mjs "$PWD/build/LemonServer" --embedded
           python3 tests/server/task_paths_test.py "$PWD/build/LemonServer" --embedded
           node tests/server/ui_test.mjs "$PWD/build/LemonServer" --embedded
           node tests/server/editor_ui_test.mjs "$PWD/build/LemonServer" --embedded

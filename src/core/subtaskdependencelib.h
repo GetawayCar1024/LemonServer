@@ -14,7 +14,7 @@
 
 const int maxDependValue = 1000000;
 
-inline int stateToStatus(ResultState in, int score, int maxScore) {
+inline int stateToStatus(ResultState in, Score score, Score maxScore) {
 	if (in == CorrectAnswer)
 		return maxDependValue;
 
@@ -24,10 +24,10 @@ inline int stateToStatus(ResultState in, int score, int maxScore) {
 	if (score <= 0)
 		return -1;
 
-	return 1ll * maxDependValue * score / maxScore;
+	return int(qBound(0.0, maxDependValue * score / maxScore, double(maxDependValue)));
 }
 
-inline int statusToScore(int ratio, int maxScore) { return 1ll * maxScore * ratio / maxDependValue; }
+inline Score statusToScore(int ratio, Score maxScore) { return maxScore * ratio / maxDependValue; }
 
 inline QString statusRankingText(int ratio) {
 	if (ratio >= maxDependValue)

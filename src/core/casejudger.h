@@ -35,7 +35,7 @@ class CaseJudger {
 	void setDiffPath(const QString &);
 	void setDataPath(const QString &);
 	void setTask(const Task *);
-	void setFullScore(int);
+	void setFullScore(Score);
 	void setTimeLimit(int);
 	void setRawTimeLimit(int);
 	void setMemoryLimit(int);
@@ -45,8 +45,8 @@ class CaseJudger {
 	                             const std::shared_ptr<WindowsSandboxSession> &);
 	int getTimeUsed() const;
 	qint64 getMemoryUsed() const;
-	int getScore() const;
-	int getFullScore() const;
+	Score getScore() const;
+	Score getFullScore() const;
 	int getJudgeTimes() const;
 	ResultState getResult() const;
 	const QString &getMessage() const;
@@ -69,14 +69,14 @@ class CaseJudger {
 	QString dataDir;
 	const Task *task{};
 	int specialJudgeTimeLimit{};
-	int fullScore{};
+	Score fullScore{};
 	int timeLimit{};
 	int rawTimeLimit{};
 	int memoryLimit{};
 	int rawMemoryLimit{};
 	int timeUsed;
 	qint64 memoryUsed;
-	int score{};
+	Score score{};
 	int judgedTimes;
 	ResultState result;
 	QString message;

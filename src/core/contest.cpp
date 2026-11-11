@@ -23,6 +23,7 @@
 #include <QEventLoop>
 #include <QJsonObject>
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 #define LEMON_MODULE_NAME "Contest"
@@ -82,8 +83,8 @@ auto Contest::getTotalTimeLimit() const -> int {
 	return total;
 }
 
-auto Contest::getTotalScore() const -> int {
-	int total = 0;
+auto Contest::getTotalScore() const -> Score {
+	Score total = 0;
 
 	for (auto *i : taskList) {
 		total += i->getTotalScore();
@@ -261,8 +262,6 @@ void Contest::cancelJudgingSlot() {
 void Contest::writeToJson(QJsonObject &out) {
 	QString version = "1.0";
 
-	WRITE_JSON(out, version);
-
 	WRITE_JSON(out, contestTitle);
 
 	QJsonArray tasks;
@@ -271,6 +270,8 @@ void Contest::writeToJson(QJsonObject &out) {
 		QJsonObject obj;
 		i->writeToJson(obj);
 		tasks.append(obj);
+		for (const auto *testCase : i->getTestCaseList())
+			if (std::trunc(testCase->getFullScore()) != testCase->getFullScore()) version = "1.1";
 	}
 
 	WRITE_JSON(out, tasks);
@@ -281,9 +282,15 @@ void Contest::writeToJson(QJsonObject &out) {
 		QJsonObject obj;
 		i->writeToJson(obj);
 		contestants.append(obj);
+		for (const auto &task : obj["score"].toArray())
+			for (const auto &group : task.toArray())
+				for (const auto &point : group.toArray())
+					if (std::trunc(point.toDouble()) != point.toDouble()) version = "1.1";
 	}
 
 	WRITE_JSON(out, contestants);
+	// Old integer-only readers reject fractional files instead of silently rounding them.
+	WRITE_JSON(out, version);
 }
 int Contest::readFromJson(const QJsonObject &in) {
 	QString version;
@@ -291,7 +298,7 @@ int Contest::readFromJson(const QJsonObject &in) {
 	// If there's no version number, consider as version 1.0
 
 	if (READ_JSON(in, version) != -1) {
-		if (version != "1.0")
+		if (version != "1.0" && version != "1.1")
 			return -1;
 	}
 
@@ -307,8 +314,10 @@ int Contest::readFromJson(const QJsonObject &in) {
 	taskList.clear();
 	for (const auto &task : tasks) {
 		Task *newTask = new Task();
-		if (newTask->readFromJson(task.toObject()) == -1)
+		if (newTask->readFromJson(task.toObject()) == -1) {
+			delete newTask;
 			return -1;
+		}
 		newTask->refreshCompilerConfiguration(settings);
 		taskList.append(newTask);
 	}
@@ -320,8 +329,10 @@ int Contest::readFromJson(const QJsonObject &in) {
 	contestantList.clear();
 	for (const auto &contestant : contestants) {
 		auto *newContestant = new Contestant();
-		if (newContestant->readFromJson(contestant.toObject()) == -1)
+		if (newContestant->readFromJson(contestant.toObject()) == -1) {
+			delete newContestant;
 			return -1;
+		}
 		connect(this, &Contest::taskAddedForContestant, newContestant, &Contestant::addTask);
 		connect(this, &Contest::taskDeletedForContestant, newContestant, &Contestant::deleteTask);
 		contestantList.insert(newContestant->getContestantName(), newContestant);

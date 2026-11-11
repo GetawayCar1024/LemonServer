@@ -31,6 +31,12 @@ test('Hydro top-level cases use sum scoring with the final cases receiving the r
   assert.equal(result.tests, 3);
 });
 
+test('fractional Hydro subtasks preserve decimal points while integer splits stay compatible', () => {
+  const result = parse('subtasks:\n - {id: 1, type: sum, score: 1.5, cases: [{input: 1.in, output: 1.out}, {input: 2.in, output: 2.out}]}\n - {id: 2, type: min, score: 0.25, cases: [{input: 3.in, output: 3.out}]}');
+  assert.deepEqual(result.patch.testCases.map(item => item.fullScore), [0.75, 0.75, 0.25]);
+  assert.deepEqual(result.warnings, []);
+});
+
 test('min/sum subtasks preserve scores and remap dependencies to all expanded groups', () => {
   const result = parse(`subtasks:
   - id: 7

@@ -35,7 +35,7 @@ auto Contestant::getResult(int index) const -> const QList<QList<ResultState>> &
 
 auto Contestant::getMessage(int index) const -> const QList<QStringList> & { return message[index]; }
 
-auto Contestant::getScore(int index) const -> const QList<QList<int>> & { return score[index]; }
+auto Contestant::getScore(int index) const -> const QList<QList<Score>> & { return score[index]; }
 
 auto Contestant::getTimeUsed(int index) const -> const QList<QList<int>> & { return timeUsed[index]; }
 
@@ -59,7 +59,7 @@ void Contestant::setResult(int index, const QList<QList<ResultState>> &_result) 
 
 void Contestant::setMessage(int index, const QList<QStringList> &_message) { message[index] = _message; }
 
-void Contestant::setScore(int index, const QList<QList<int>> &_score) { score[index] = _score; }
+void Contestant::setScore(int index, const QList<QList<Score>> &_score) { score[index] = _score; }
 
 void Contestant::setTimeUsed(int index, const QList<QList<int>> &_timeUsed) { timeUsed[index] = _timeUsed; }
 
@@ -93,7 +93,7 @@ void Contestant::addTask() {
 	inputFiles.append(QList<QStringList>());
 	result.append(QList<QList<ResultState>>());
 	message.append(QList<QStringList>());
-	score.append(QList<QList<int>>());
+	score.append(QList<QList<Score>>());
 	timeUsed.append(QList<QList<int>>());
 	memoryUsed.append(QList<QList<qint64>>());
 }
@@ -130,19 +130,19 @@ void Contestant::swapTask(int a, int b) {
 	memoryUsed.swapItemsAt(a, b);
 }
 
-auto Contestant::getTaskScore(int index) const -> int {
+auto Contestant::getTaskScore(int index) const -> Score {
 	if (0 > index || index >= checkJudged.size())
 		return -1;
 
 	if (! checkJudged[index])
 		return -1;
 
-	int total = 0;
+	Score total = 0;
 
 	for (const auto &i : score[index]) {
-		int minv = 1000000000;
+		Score minv = 1000000000;
 
-		for (int j : i) {
+		for (Score j : i) {
 			if (j < minv && j >= 0)
 				minv = j;
 		}
@@ -156,7 +156,7 @@ auto Contestant::getTaskScore(int index) const -> int {
 	return total;
 }
 
-auto Contestant::getTotalScore() const -> int {
+auto Contestant::getTotalScore() const -> Score {
 	if (checkJudged.empty())
 		return -1;
 
@@ -165,7 +165,7 @@ auto Contestant::getTotalScore() const -> int {
 			return -1;
 	}
 
-	int total = 0;
+	Score total = 0;
 
 	for (int i = 0; i < score.size(); i++) {
 		total += getTaskScore(i);
@@ -249,7 +249,17 @@ void Contestant::readFromStream(QDataStream &in) {
 	in >> compileMesaage;
 	in >> inputFiles;
 	in >> message;
-	in >> score;
+	QList<QList<QList<int>>> oldScores;
+	in >> oldScores;
+	for (const auto &task : oldScores) {
+		QList<QList<Score>> converted;
+		for (const auto &group : task) {
+			QList<Score> points;
+			for (int point : group) points.append(point);
+			converted.append(points);
+		}
+		score.append(converted);
+	}
 	in >> timeUsed;
 	// memoryUsed 之前存储为 int 三维数组，现在改为了 qint64，因此先读取旧结构，再逐层转换
 	QList<QList<QList<int>>> oldMemoryUsed;

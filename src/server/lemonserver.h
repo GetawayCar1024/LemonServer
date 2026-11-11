@@ -15,6 +15,8 @@
 #include <QJsonObject>
 #include <QObject>
 #include <optional>
+#include <functional>
+#include <QMap>
 
 class Contest;
 class Contestant;
@@ -64,7 +66,9 @@ class LemonServer : public QObject {
 	QJsonObject contestantJson(Contest *contest, Contestant *ct) const;
 	QJsonObject publicContestantJson(Contest *contest, Contestant *ct, bool details = false) const;
 	QJsonObject publicContestJson(Contest *contest) const;
-	QJsonObject publicJudgeStatus(const QString &name) const;
+	QJsonObject publicJudgeStatus(const QString &name, qint64 since = 0) const;
+	QHttpServerResponse cachedPublicResponse(const QString &key, quint64 revision, const QHttpServerRequest &request,
+	                                         const std::function<QJsonObject()> &build, int lifetime = 1000) const;
 	// Files submitted by a contestant for a task (source files, or answer files of an answers-only task).
 	QStringList submissionFiles(Contest *contest, Contestant *ct, int taskIndex) const;
 	void serveStatic(const QHttpServerRequest &req, QHttpServerResponder &responder) const;
@@ -75,4 +79,7 @@ class LemonServer : public QObject {
 	ContestManager *manager;
 	QString webRoot;
 	QHttpServer server;
+	struct PublicSnapshot { quint64 revision; qint64 expires; QByteArray bytes; QByteArray etag; };
+	mutable QMap<QString, PublicSnapshot> publicSnapshots;
+	mutable qint64 publicSnapshotBytes = 0;
 };

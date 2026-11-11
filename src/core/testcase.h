@@ -11,18 +11,19 @@
 //
 
 #include <QObject>
+#include "base/LemonType.hpp"
 
 class TestCase {
   public:
 	explicit TestCase();
-	int getFullScore() const;
+	Score getFullScore() const;
 	int getTimeLimit() const;
 	int getMemoryLimit() const;
 	const QStringList &getInputFiles() const;
 	const QStringList &getOutputFiles() const;
 	const QList<int> &getDependenceSubtask() const;
 	void setIndex(int);
-	void setFullScore(int);
+	void setFullScore(Score);
 	void setTimeLimit(int);
 	void setMemoryLimit(int);
 	void setInputFiles(int, const QString &);
@@ -44,7 +45,7 @@ class TestCase {
 	QStringList outputFiles;
 	QList<int> dependenceSubtask;
 	int index{};
-	int fullScore{};
+	Score fullScore{};
 	int timeLimit{};
 	int memoryLimit{};
 };

@@ -9,6 +9,7 @@
 //
 
 #include <QDialog>
+#include "base/LemonType.hpp"
 
 namespace Ui {
 	class ExtTestCaseUpdaterDialog;
@@ -28,12 +29,12 @@ class ExtTestCaseUpdaterDialog : public QDialog {
   public:
 	explicit ExtTestCaseUpdaterDialog(QWidget *parent = nullptr, Task *nowTask = nullptr,
 	                                  const Settings *nowSettings = nullptr, int nowCaseNumber = 0,
-	                                  int editScore = NO_EDIT, int editData = NO_EDIT, int editTime = NO_EDIT,
+	                                  Score editScore = NO_EDIT, int editData = NO_EDIT, int editTime = NO_EDIT,
 	                                  int editMemory = NO_EDIT, int editDepend = NO_EDIT,
 	                                  QList<int> tempDepends = QList<int>());
 	~ExtTestCaseUpdaterDialog();
 
-	int getScore() const;
+	Score getScore() const;
 	QString getInput() const;
 	QString getOutput() const;
 	int getTimeLimit() const;
@@ -50,18 +51,19 @@ class ExtTestCaseUpdaterDialog : public QDialog {
 	Task *nowTask;
 	const Settings *nowSettings;
 	int nowCaseNumber;
-	int editScore;
+	Score editScore;
 	int editData;
 	int editTime;
 	int editMemory;
 	int editDepend;
 
-	int score;
+	Score score;
 	QString input, output;
 	int timeLimit, memoryLimit;
 	QStringList depends;
 
-	int defScore, defTimeLimit, defMemoryLimit;
+	Score defScore;
+	int defTimeLimit, defMemoryLimit;
 
 	void chooseFile(const QString &title, const QStringList &extensions, QLineEdit *targetEdit);
 
