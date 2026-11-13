@@ -86,8 +86,20 @@ class ContestManager : public QObject {
 	bool isArchived(const QString &name) const;
 	bool isPublic(const QString &name) const;
 	bool setArchived(bool archived, QString *error);
+	// Archived contests can be made public or private too: this does not change their data.
 	bool setPublic(bool visible, QString *error);
 	quint64 revision(const QString &name = QString()) const;
+
+	// Several CodeHub servers may share one contest. The first one to create a contestant's folder under
+	// source/ owns that contestant ("owners" in lemonserver.json, by the X-CodeHub-Instance header); each
+	// CodeHub only sees, uploads and judges its own contestants. Other clients are not restricted.
+	QString ownerOf(const QString &who) const;
+	// Claim `who` of the current contest for `owner`. Returns false with *conflict set when another owner
+	// has it, or false with an error when lemonserver.json cannot be written.
+	bool claimContestant(const QString &who, const QString &owner, bool *conflict, QString *error);
+	// Forget the owner (the contestant was deleted).
+	void releaseContestant(const QString &who);
+	bool ownedBy(const QString &contest, const QString &who, const QString &owner) const;
 
 	// ---------------- judging queue ----------------
 	// Queue a judging request of the current contest ({"mode", "items", "compileStates", "resultStates",
@@ -155,6 +167,9 @@ class ContestManager : public QObject {
 	void startNext();
 	void runJudge(const QList<std::pair<QString, QVector<int>>> &list);
 	QJsonObject jobJson(const Job &job, int position) const;
+	// A request made by a CodeHub server ("owner") only judges the contestants it owns.
+	void restrictToOwner(const QString &contest, const QJsonObject &request, QMap<QString, QVector<int>> *mapping) const;
+	QJsonObject propertiesOf(const QString &name) const;
 	static QJsonObject readProperties(const QString &dir);
 	static bool saveProperties(const QString &dir, const QJsonObject &properties, QString *error);
 	bool writeProperties(QString *error);

@@ -574,9 +574,9 @@ async function renderContestList(archived = false) {
       h('div', { class: 'muted small-text' }, [c.title && c.title !== c.name ? c.name : null, `${c.tasks ?? '-'} 题`, `${c.contestants ?? '-'} 名选手`, c.modified].filter(Boolean).join(' · '))),
     h('button', { class: 'primary', onclick: () => go(destination(c)) }, '打开'),
     admin && archived ? h('button', { 'data-unarchive': c.name, onclick: () => changeArchive(c.name, false) }, '取消存档') : null,
-    admin && !archived ? h('button', { onclick: () => changePublic(c.name, !c.public) }, c.public ? '取消公开' : '公开') : null,
+    admin ? h('button', { 'data-public': c.name, onclick: () => changePublic(c.name, !c.public) }, c.public ? '取消公开' : '公开') : null,
     admin && !archived ? h('button', { disabled: c.busy, onclick: () => changeArchive(c.name, true) }, '存档') : null,
-    admin && !archived ? h('button', { onclick: () => cloneContestDlg(c) }, '克隆') : null,
+    admin ? h('button', { 'data-clone': c.name, onclick: () => cloneContestDlg(c) }, '克隆') : null,
     admin && !archived ? h('button', {
       class: 'danger', onclick: async () => {
         if (!await confirmDlg(`删除比赛“${c.name}”及其全部文件？无法恢复。`, '删除')) return;
@@ -620,13 +620,29 @@ function loginReturn(remove = false) {
   return typeof value === 'string' && value.startsWith('#/') && !value.startsWith('#/login') ? value : '#/contests';
 }
 
+// Re-render the page after an action without jumping back to the top: the scroll positions of the
+// page's scrolling areas are restored (matched by their order on the page).
+const SCROLL_AREAS = '#app :is(.page, .editor, .results-wrap, .tree-list, .fs-tree, .fs-list)';
+async function routeKeepingScroll() {
+  const saved = [...document.querySelectorAll(SCROLL_AREAS)].map(el => ({ cls: el.className, top: el.scrollTop, left: el.scrollLeft }));
+  const hash = location.hash;
+  await route();
+  if (location.hash !== hash) return;
+  const restore = () => {
+    const now = [...document.querySelectorAll(SCROLL_AREAS)];
+    saved.forEach((s, i) => { if (now[i] && now[i].className === s.cls) { now[i].scrollTop = s.top; now[i].scrollLeft = s.left; } });
+  };
+  restore();
+  requestAnimationFrame(restore); // content laid out after an asynchronous render
+}
+
 async function changePublic(name, visible, refresh = true) {
   try { await LemonAutosave.flushAll(); } catch (error) { fail(error); return false; }
   if (visible && !await confirmDlg('公开比赛的成绩和评测详情？源代码不会公开。', '公开', false)) return false;
   try {
     const contest = await api('PUT', cpath(name), { public: visible });
     if (S.contest?.name === name) Object.assign(S.contest, contest);
-    if (refresh) await route();
+    if (refresh) await routeKeepingScroll();
     return true;
   } catch (error) { fail(error); return false; }
 }
@@ -637,7 +653,7 @@ async function changeArchive(name, archived) {
   try {
     const contest = await api(archived ? 'POST' : 'DELETE', cpath(name) + '/archive?summary=1');
     if (S.contest?.name === name) S.contest = contest;
-    await route();
+    await routeKeepingScroll();
   } catch (error) { fail(error); }
 }
 
@@ -933,7 +949,7 @@ function openContestProperties() {
   if (!isAdmin()) return;
   const readOnly = !!S.contest.archived;
   let changed = false;
-  const published = h('input', { type: 'checkbox', disabled: readOnly, checked: S.contest.public, onchange: async () => {
+  const published = h('input', { type: 'checkbox', checked: S.contest.public, onchange: async () => {
     published.disabled = true;
     try { changed = await changePublic(S.contest.name, published.checked, false) || changed; published.checked = !!S.contest.public; }
     finally { published.disabled = false; }
@@ -978,7 +994,7 @@ function openContestProperties() {
       down,
       zipList),
     buttons: [{ label: '完成', primary: true }],
-    onClose: () => { if (changed) route(); },
+    onClose: () => { if (changed) routeKeepingScroll(); },
   });
 }
 
@@ -3787,7 +3803,7 @@ function renderApiDoc() {
     ['GET /api/contests', '比赛列表'],
     ['POST /api/contests', '{"name","title"?} 新建'],
     ['GET · PUT · DELETE ' + C, '打开（试题与成绩）/ 修改 {"title"?,"downZip"?,"public"?} / 删除'],
-    ['POST · DELETE ' + C + '/archive', '存档 / 取消存档；存档后禁止修改、评测和覆盖导入'],
+    ['POST · DELETE ' + C + '/archive', '存档 / 取消存档；存档后禁止修改、评测和覆盖导入，仍可克隆，也可用 PUT ' + C + ' {"public"} 公开或取消公开'],
     ['GET · PUT · DELETE ' + C + '/down-zip', '下载 / 上传（请求体为 zip，保存为 down.zip）/ 清除（&deleteFile=1 同时删除文件）；PUT ' + C + ' {"downZip":"路径"} 指定已有文件'],
     ['POST ' + C + '/clone', '{"name","title"?,"withSubmissions"?:false} 克隆比赛'],
     ['POST /api/import-contest?name=&overwrite=1', '请求体为比赛 zip（含 .cdf，可带一层顶层文件夹），导入为新比赛'],
@@ -3829,6 +3845,9 @@ function renderApiDoc() {
     ['GET /api/testlib/templates', '内置模板列表（checkers/wcmp.cpp 等）'],
     ['POST ' + C + '/files/template', '{"root","path":"目录","template","name"?} 从模板创建文件'],
     ['GET /api/testlib/testlib.h', '下载 testlib.h'],
+    ['多个 CodeHub 共用一场比赛（请求头 X-CodeHub-Instance）', ''],
+    ['归属', '某个 CodeHub 第一次在 source/{who} 下建文件夹或上传时，该选手归它所有；其他 CodeHub 再写同名选手返回 409 {"ownedByOther":true}。删除该选手后可重新归属'],
+    ['可见范围', '带此请求头时，比赛详情、选手详情、源程序与评测事件只含自己的选手；评测只评测自己的选手（job 带 owner）；不能导出结果或统计'],
     ['游客只读（无需认证，仅公开比赛）', ''],
     ['GET /api/public/contests?archived=0|1', '公开比赛列表，区分当前与已存档比赛'],
     ['GET /api/public/contests/{name}', '成绩表及该比赛的评测状态，不含代码、文件或服务器路径'],

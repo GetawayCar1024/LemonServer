@@ -103,7 +103,7 @@ try {
   assert.equal((await guest(pub)).archived, true);
   const cdf = path.join(home, 'contests/public-round/public-round.cdf'), before = createHash('sha256').update(await fs.readFile(cdf)).digest('hex');
   const writes = [
-    ['PUT', '', { title: 'changed' }], ['PUT', '', { public: false }], ['POST', '/save'], ['DELETE', ''],
+    ['PUT', '', { title: 'changed' }], ['PUT', '', { public: false, title: 'changed' }], ['PUT', '', { public: false, downZip: '' }], ['POST', '/save'], ['DELETE', ''],
     ['POST', '/tasks', {}], ['PUT', '/tasks/0', {}], ['DELETE', '/tasks/0'], ['POST', '/tasks/0/move', { to: 0 }],
     ['POST', '/add-tasks', {}], ['POST', '/refresh'], ['POST', '/cleanup', {}], ['DELETE', '/contestants/alice'],
     ['POST', '/judge', { mode: 'all' }], ['POST', '/judge/stop'], ['POST', '/judge/cancel'], ['DELETE', '/judge'],
@@ -122,6 +122,16 @@ try {
   assert.equal(createHash('sha256').update(await fs.readFile(cdf)).digest('hex'), before);
   const clone = await call('POST', base + '/clone', { body: { name: 'archive-copy', withSubmissions: true }, expect: 201 });
   assert.equal(clone.public, false); assert.equal(clone.archived, false);
+  assert.deepEqual(clone.contestants.map(c => c.name).sort(), ['alice', 'bad'], 'an archived contest is cloned with its results');
+  // making an archived contest public or private only changes its visibility, not its data
+  for (const auth of [token, key]) {
+    assert.equal((await call('PUT', base, { body: { public: false }, auth })).public, false);
+    await guest(pub, 404);
+    assert.deepEqual((await guest('/api/public/contests?archived=1')).contests, []);
+    assert.equal((await call('PUT', base, { body: { public: true }, auth })).archived, true);
+    assert.equal((await guest(pub)).archived, true);
+  }
+  assert.equal(createHash('sha256').update(await fs.readFile(cdf)).digest('hex'), before);
   await stop(); await start(); token = (await call('POST', '/api/auth/login', { body: { token: '123456' } })).session;
   assert.equal((await call('GET', base)).archived, true); assert.equal((await guest(pub)).public, true);
   assert.equal(createHash('sha256').update(await fs.readFile(cdf)).digest('hex'), before);

@@ -131,6 +131,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/server/judge_queue_test.mjs "$env:PKG\LemonServer.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/codehub_sharing_test.mjs "$env:PKG\LemonServer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/archive_ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -207,6 +211,8 @@ jobs:
           node tests/server/access_ui_test.mjs "$PWD/build/LemonServer" --embedded
           node tests/server/interaction_ui_test.mjs "$PWD/build/LemonServer" --embedded
           node tests/server/judge_queue_test.mjs "$PWD/build/LemonServer"
+          node tests/server/codehub_sharing_test.mjs "$PWD/build/LemonServer"
+          node tests/server/archive_ui_test.mjs "$PWD/build/LemonServer" --embedded
 
       - name: Build .deb
         env:

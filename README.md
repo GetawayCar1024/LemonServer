@@ -92,7 +92,15 @@ LemonServer [--host 0.0.0.0] [--port 8080] [--config <server.json>] [--web-root 
 
 比赛默认不公开。在比赛列表点击“公开”，或在“比赛设置”勾选“公开结果”，游客才可访问其结果页。游客结果与导出接口采用字段白名单，不提供源码、编译输出、源文件大小、服务器路径、任意文件下载或评测队列；取消公开后已打开的游客页面也会停止显示该比赛。公开响应支持 ETag／304，服务器限制缓存条目数和总大小。
 
-存档状态与公开状态独立：公开比赛存档后仍可浏览结果，未公开的存档比赛只有管理员可见。管理员保留全部页签和文件浏览／下载功能。存档会先保存当前修改，不重复写入未修改的 CDF；正在评测或排队的比赛不能存档。存档后的修改、评测、文件写入和覆盖导入都会被 API 拒绝，API Key 也不能绕过。取消存档后才能继续修改。标记保存在比赛目录的 `lemonserver.json`，不会为存档操作改变 CDF 格式。
+存档状态与公开状态独立：公开比赛存档后仍可浏览结果，未公开的存档比赛只有管理员可见。管理员保留全部页签和文件浏览／下载功能。存档会先保存当前修改，不重复写入未修改的 CDF；正在评测或排队的比赛不能存档。存档后的修改、评测、文件写入和覆盖导入都会被 API 拒绝，API Key 也不能绕过。取消存档后才能继续修改。存档比赛仍可克隆（可选择连同选手程序和成绩），也可以公开或取消公开，这些操作不改动其数据。标记保存在比赛目录的 `lemonserver.json`，不会为存档操作改变 CDF 格式。在比赛列表中存档、取消存档、公开或取消公开后，页面停留在原来的滚动位置。
+
+### 多个 CodeHub 共用一场比赛
+
+多个 CodeHub（例如不同机房各一台）可以关联同一场比赛。CodeHub 0.1.13 起在请求中带上 `X-CodeHub-Instance` 实例标识：某个 CodeHub 第一次为选手在 `source/<选手>/` 建立文件夹或上传代码时，该选手归它所有（记录在 `lemonserver.json` 的 `owners` 中）。之后：
+
+- 其他 CodeHub 不能写入该选手的文件夹，返回 409 `{"ownedByOther":true}`，不会覆盖代码；CodeHub 会提示重名账号。
+- 带此请求头时，比赛详情、选手详情、源程序、文件下载和评测事件只包含该 CodeHub 自己的选手，评测请求也只评测它自己的选手（队列中的 job 带 `owner`）；不能导出结果或统计。不带请求头的访问（网页、其他脚本）不受影响，管理员仍看到全部选手。
+- 在 LemonServer 上删除该选手后，名字可以重新归属。
 
 - `--config`：服务器配置文件（令牌哈希、API Key、默认比赛位置），默认在 `%LOCALAPPDATA%\LemonServer\server.json`（Linux：`~/.config/LemonServer/server.json`）。
 - 评测设置与编译器默认保存在配置文件旁的 `settings.ini` 中，首次启动会自动检测 PATH 中的 gcc / g++ / fpc / jdk / python。加 `--use-desktop-settings` 则与本机的 LemonLime 桌面版共用设置。
@@ -147,7 +155,7 @@ python tests/server/smoke_test.py http://127.0.0.1:8080 /path/to/empty/contest-r
 
 评测队列回归（取消／停止、相同内容上传、多比赛排队、强制结束后的保存）：`node tests/server/judge_queue_test.mjs /path/to/LemonServer`（需要 g++）。Hydro 转换回归：`node --test tests/server/hydro_import_test.mjs`。管理器、拖排、校验器和导入的浏览器回归：`node tests/server/editor_ui_test.mjs /path/to/LemonServer --embedded`。与原版评测器的对比方法和保留差异见 [评测一致性](docs/judging-compatibility.md)。
 
-小数分值：`node tests/server/fractional_scores_test.mjs /path/to/LemonServer`；公开进度与安全导出：`node tests/server/public_features_test.mjs /path/to/LemonServer`；缓存／存档性能：`node tests/server/performance_test.mjs /path/to/LemonServer`；登录返回与存档只读界面：`node tests/server/workflow_ui_test.mjs /path/to/LemonServer --embedded`。
+小数分值：`node tests/server/fractional_scores_test.mjs /path/to/LemonServer`；公开进度与安全导出：`node tests/server/public_features_test.mjs /path/to/LemonServer`；缓存／存档性能：`node tests/server/performance_test.mjs /path/to/LemonServer`；登录返回与存档只读界面：`node tests/server/workflow_ui_test.mjs /path/to/LemonServer --embedded`；存档比赛克隆／公开与列表滚动位置：`node tests/server/archive_ui_test.mjs /path/to/LemonServer --embedded`；多个 CodeHub 共用比赛：`node tests/server/codehub_sharing_test.mjs /path/to/LemonServer`（需要 g++）。
 
 ## 代码结构与对上游的改动
 

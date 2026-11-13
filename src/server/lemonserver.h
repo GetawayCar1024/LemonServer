@@ -61,6 +61,13 @@ class LemonServer : public QObject {
 	bool isReservedFile(const QString &abs) const;
 	// abs was written / removed: if it is a submission under source/, mark the results outdated.
 	void sourceChanged(const QString &abs);
+	// The CodeHub server making the request (X-CodeHub-Instance header), empty for other clients.
+	QString clientInstance(const QHttpServerRequest &req) const;
+	// Only the contestants of that CodeHub server (see ContestManager::claimContestant).
+	QJsonObject forClient(const QHttpServerRequest &req, QJsonObject contest) const;
+	QJsonObject judgeStatusFor(const QHttpServerRequest &req, qint64 since) const;
+	// abs is under source/<who>/: a CodeHub server may only use its own contestants (claim = write).
+	std::optional<QHttpServerResponse> checkSourceOwner(const QHttpServerRequest &req, const QString &abs, bool claim);
 
 	QJsonObject contestJson(Contest *contest) const;
 	QJsonObject contestantJson(Contest *contest, Contestant *ct) const;

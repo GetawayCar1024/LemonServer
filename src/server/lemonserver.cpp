@@ -317,16 +317,50 @@ std::optional<QHttpServerResponse> LemonServer::denied(const QHttpServerRequest 
 		return errorResponse(Status::Unauthorized, tr("Not authenticated"));
 	if (sessionOnly && a != Access::Session)
 		return errorResponse(Status::Forbidden, tr("This operation requires logging in with the access token"));
+	static const QRegularExpression validInstance("^[A-Za-z0-9_-]{1,64}$");
+	if (req.headers().contains("X-CodeHub-Instance") && ! validInstance.match(clientInstance(req)).hasMatch())
+		return errorResponse(Status::BadRequest, "invalid X-CodeHub-Instance header");
 	// All authenticated mutation routes share the archive gate, including file upload/compile.
+	// Cloning, (un)archiving and making the results public or private do not change the contest.
 	const auto path = req.url().path(QUrl::FullyDecoded);
 	const QString prefix = "/api/contests/";
 	if (req.method() != Method::Get && req.method() != Method::Head && req.method() != Method::Options && path.startsWith(prefix)) {
 		const auto name = path.mid(prefix.size()).section('/', 0, 0);
 		const auto suffix = path.mid(prefix.size() + name.size());
-		if (suffix != "/archive" && suffix != "/clone" && manager->isArchived(name))
+		const auto body = QJsonDocument::fromJson(req.body()).object();
+		const bool onlyPublic = suffix.isEmpty() && req.method() == Method::Put && body.size() == 1 && body.contains("public");
+		if (suffix != "/archive" && suffix != "/clone" && ! onlyPublic && manager->isArchived(name))
 			return QHttpServerResponse(QJsonObject{{"error", tr("This contest is archived. Unarchive it before making changes.")}, {"archived", true}}, Status::Conflict);
 	}
 	return std::nullopt;
+}
+
+QString LemonServer::clientInstance(const QHttpServerRequest &req) const {
+	return QString::fromUtf8(req.headers().value("X-CodeHub-Instance").toByteArray()).trimmed();
+}
+
+QJsonObject LemonServer::forClient(const QHttpServerRequest &req, QJsonObject contest) const {
+	const QString owner = clientInstance(req);
+	if (owner.isEmpty()) return contest;
+	QJsonArray mine;
+	for (const auto &value : contest["contestants"].toArray())
+		if (manager->ownedBy(manager->currentName(), value.toObject()["name"].toString(), owner)) mine.append(value);
+	contest["contestants"] = mine;
+	return contest;
+}
+
+QJsonObject LemonServer::judgeStatusFor(const QHttpServerRequest &req, qint64 since) const {
+	auto status = manager->judgeStatus(since);
+	const QString owner = clientInstance(req);
+	if (owner.isEmpty()) return status;
+	const QString contest = status["contest"].toString();
+	QJsonArray events;
+	for (const auto &value : status["events"].toArray()) {
+		const auto event = value.toObject();
+		if (! event.contains("contestant") || manager->ownedBy(contest, event["contestant"].toString(), owner)) events.append(event);
+	}
+	status["events"] = events;
+	return status;
 }
 
 std::optional<QHttpServerResponse> LemonServer::withContest(const QString &name, Contest **out) {
@@ -402,6 +436,29 @@ void LemonServer::sourceChanged(const QString &abs) {
 	const QStringList parts = path.mid(base.size() + 1).split('/', Qt::SkipEmptyParts);
 	if (! parts.isEmpty())
 		manager->markSourceChanged(parts.first(), parts.mid(1));
+}
+
+// A CodeHub server may only write the folders of its own contestants under source/; the first write
+// claims the contestant. Reads of another CodeHub's contestant are answered as if it did not exist.
+std::optional<QHttpServerResponse> LemonServer::checkSourceOwner(const QHttpServerRequest &req, const QString &abs, bool claim) {
+	const QString owner = clientInstance(req);
+	if (owner.isEmpty() || ! manager->current()) return std::nullopt;
+	const QString base = QDir::cleanPath(QDir(manager->currentDir()).absoluteFilePath("source"));
+	const QString path = QDir::cleanPath(abs);
+	if (claim && path.compare(base, kPathCase) == 0)
+		return errorResponse(Status::Forbidden, tr("A CodeHub server can only write the folders of its own contestants"));
+	if (! path.startsWith(base + "/", kPathCase)) return std::nullopt;
+	const QString who = path.mid(base.size() + 1).section('/', 0, 0);
+	if (! claim) {
+		if (manager->ownerOf(who) == owner) return std::nullopt;
+		return errorResponse(Status::NotFound, tr("File not found"));
+	}
+	bool conflict = false;
+	QString error;
+	if (manager->claimContestant(who, owner, &conflict, &error)) return std::nullopt;
+	if (! conflict) return errorResponse(Status::InternalServerError, error);
+	return QHttpServerResponse(QJsonObject{{"error", tr("Contestant %1 belongs to another CodeHub server in this contest").arg(who)},
+	                                       {"ownedByOther", true}, {"contestant", who}}, Status::Conflict);
 }
 
 QStringList LemonServer::submissionFiles(Contest *contest, Contestant *ct, int index) const {
@@ -1173,7 +1230,7 @@ void LemonServer::setupContestRoutes() {
 		const QString name = body["name"].toString().trimmed();
 		if (! manager->createContest(name, body["title"].toString().trimmed(), &error))
 			return errorResponse(Status::BadRequest, error);
-		return jsonResponse(contestJson(manager->current()), Status::Created);
+		return jsonResponse(forClient(req, contestJson(manager->current())), Status::Created);
 	});
 
 	// Clone a contest: {"name", "title"?, "withSubmissions"?: false}
@@ -1193,7 +1250,7 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(to, &c))
 			             return std::move(*r);
-		             return jsonResponse(contestJson(c), Status::Created);
+		             return jsonResponse(forClient(req, contestJson(c)), Status::Created);
 	             });
 
 	server.route("/api/contests/<arg>", Method::Get, [this](const QString &name, const QHttpServerRequest &req) {
@@ -1202,7 +1259,7 @@ void LemonServer::setupContestRoutes() {
 		Contest *c = nullptr;
 		if (auto r = withContest(name, &c))
 			return std::move(*r);
-		return jsonResponse(contestJson(c));
+		return jsonResponse(forClient(req, contestJson(c)));
 	});
 
 	server.route("/api/contests/<arg>", Method::Put, [this](const QString &name, const QHttpServerRequest &req) {
@@ -1235,7 +1292,7 @@ void LemonServer::setupContestRoutes() {
 			QString error;
 			if (! manager->setPublic(body["public"].toBool(), &error)) return errorResponse(Status::InternalServerError, error);
 		}
-		return jsonResponse(contestJson(c));
+		return jsonResponse(forClient(req, contestJson(c)));
 	});
 
 	server.route("/api/contests/<arg>/archive", Method::Post | Method::Delete,
@@ -1247,7 +1304,7 @@ void LemonServer::setupContestRoutes() {
 		             QString error;
 		             if (! manager->setArchived(req.method() == Method::Post, &error)) return errorResponse(Status::InternalServerError, error);
 		             if (queryFlag(req, "summary")) return jsonResponse({{"name", manager->currentName()}, {"archived", manager->isArchived(name)}, {"public", manager->isPublic(name)}});
-		             return jsonResponse(contestJson(contest));
+		             return jsonResponse(forClient(req, contestJson(contest)));
 	             });
 
 	// down.zip of the contest (reserved for later use): GET downloads it, PUT/POST uploads it
@@ -1515,7 +1572,7 @@ void LemonServer::setupContestRoutes() {
 			             return std::move(*r);
 		             c->refreshContestantList();
 		             manager->save();
-		             return jsonResponse(contestJson(c));
+		             return jsonResponse(forClient(req, contestJson(c)));
 	             });
 
 	server.route("/api/contests/<arg>/cleanup", Method::Post,
@@ -1543,7 +1600,7 @@ void LemonServer::setupContestRoutes() {
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
 		             Contestant *ct = c->getContestant(who);
-		             if (! ct)
+		             if (! ct || (! clientInstance(req).isEmpty() && manager->ownerOf(who) != clientInstance(req)))
 			             return errorResponse(Status::NotFound, "no such contestant");
 		             auto obj = contestantJson(c, ct);
 		             QJsonArray details;
@@ -1562,10 +1619,11 @@ void LemonServer::setupContestRoutes() {
 			             return std::move(*r);
 		             if (auto r = notWhileBusy())
 			             return std::move(*r);
-		             if (! c->getContestant(who))
+		             if (! c->getContestant(who) || (! clientInstance(req).isEmpty() && manager->ownerOf(who) != clientInstance(req)))
 			             return errorResponse(Status::NotFound, "no such contestant");
 		             // ResultViewer::deleteContestant()
 		             c->deleteContestant(who);
+		             manager->releaseContestant(who); // another CodeHub server may use the name now
 		             if (queryFlag(req, "deleteFiles") && ContestManager::isValidContestName(who))
 			             QDir(Settings::sourcePath() + who).removeRecursively();
 		             manager->save();
@@ -1580,7 +1638,7 @@ void LemonServer::setupContestRoutes() {
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
 		             Contestant *ct = c->getContestant(who);
-		             if (! ct || ! c->getTask(index))
+		             if (! ct || ! c->getTask(index) || (! clientInstance(req).isEmpty() && manager->ownerOf(who) != clientInstance(req)))
 			             return errorResponse(Status::NotFound, "not found");
 		             QJsonArray files;
 		             for (const auto &path : submissionFiles(c, ct, index)) {
@@ -1610,6 +1668,9 @@ void LemonServer::setupContestRoutes() {
 		             for (const char *key : {"items", "compileStates", "resultStates", "refresh", "tasks"})
 			             if (body.contains(key))
 				             request[key] = body[key];
+		             // a CodeHub server only judges its own contestants (others may share the contest)
+		             if (! clientInstance(req).isEmpty())
+			             request["owner"] = clientInstance(req);
 		             QJsonObject job;
 		             QString error;
 		             bool nothingToJudge = false;
@@ -1617,7 +1678,7 @@ void LemonServer::setupContestRoutes() {
 			             return QHttpServerResponse(QJsonObject{{"error", error}, {"nothingToJudge", nothingToJudge}},
 			                                        nothingToJudge ? Status::Conflict : Status::BadRequest);
 		             // the log only when this job started right away (otherwise it is another job's log)
-		             auto status = manager->judgeStatus(job["position"].toInt() == 0 ? 0 : std::numeric_limits<qint64>::max());
+		             auto status = judgeStatusFor(req, job["position"].toInt() == 0 ? 0 : std::numeric_limits<qint64>::max());
 		             status["job"] = job;
 		             return jsonResponse(status, Status::Accepted);
 	             });
@@ -1694,12 +1755,12 @@ void LemonServer::setupContestRoutes() {
 	server.route("/api/contests/<arg>/judge/status", Method::Get, [this](const QString &, const QHttpServerRequest &req) {
 		if (auto r = denied(req))
 			return std::move(*r);
-		return jsonResponse(manager->judgeStatus(queryValue(req, "since").toLongLong()));
+		return jsonResponse(judgeStatusFor(req, queryValue(req, "since").toLongLong()));
 	});
 	server.route("/api/judge/status", Method::Get, [this](const QHttpServerRequest &req) {
 		if (auto r = denied(req))
 			return std::move(*r);
-		return jsonResponse(manager->judgeStatus(queryValue(req, "since").toLongLong()));
+		return jsonResponse(judgeStatusFor(req, queryValue(req, "since").toLongLong()));
 	});
 
 	// The judging queue of the whole server: {"running": job | null, "queue": [jobs]}
@@ -1726,6 +1787,8 @@ void LemonServer::setupContestRoutes() {
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
 		             // ExportUtil::exportResult()
+		             if (! clientInstance(req).isEmpty())
+			             return errorResponse(Status::Forbidden, tr("A CodeHub server only receives the results of its own contestants"));
 		             if (queryFlag(req, "save")) if (auto r = notWhileArchived()) return std::move(*r);
 		             if (c->getContestantList().isEmpty())
 			             return errorResponse(Status::BadRequest, ExportUtil::tr("No contestant in current contest"));
@@ -1766,6 +1829,8 @@ void LemonServer::setupContestRoutes() {
 		             Contest *c = nullptr;
 		             if (auto r = withContest(name, &c))
 			             return std::move(*r);
+		             if (! clientInstance(req).isEmpty())
+			             return errorResponse(Status::Forbidden, tr("A CodeHub server only receives the results of its own contestants"));
 		             const QString html = StatisticsUtil::generateHtml(c);
 		             if (queryFlag(req, "download"))
 			             return downloadResponse("text/html; charset=utf-8", html.toUtf8(), "statistics.html");
@@ -1881,6 +1946,8 @@ void LemonServer::setupFileRoutes() {
 		             if (! resolvePath(manager->currentDir(), queryValue(req, "root"), queryValue(req, "path"),
 		                               &abs, nullptr, &error))
 			             return errorResponse(Status::BadRequest, error);
+		             if (auto r = checkSourceOwner(req, abs, false))
+			             return std::move(*r);
 		             QFileInfo fi(abs);
 		             if (fi.isDir()) {
 			             // zip the whole folder
@@ -1947,6 +2014,8 @@ void LemonServer::setupFileRoutes() {
 			             return errorResponse(Status::BadRequest, tr("A file name is required"));
 		             if (isReservedFile(abs))
 			             return errorResponse(Status::BadRequest, tr("This item cannot be edited"));
+		             if (auto r = checkSourceOwner(req, abs, true))
+			             return std::move(*r);
 		             // The same content again (e.g. CodeHub retrying or resyncing): keep the file and its results.
 		             if (sameFileContent(abs, req.body()))
 			             return okResponse({{"size", double(req.body().size())},
@@ -1984,6 +2053,8 @@ void LemonServer::setupFileRoutes() {
 			             return errorResponse(Status::BadRequest, tr("A file name is required"));
 		             if (isReservedFile(abs))
 			             return errorResponse(Status::BadRequest, tr("This item cannot be edited"));
+		             if (auto r = checkSourceOwner(req, abs, true))
+			             return std::move(*r);
 		             QFileInfo fi(abs);
 		             if (fi.exists() && body.contains("expectedModifiedMs") &&
 		                 qint64(body["expectedModifiedMs"].toDouble()) != fi.lastModified().toMSecsSinceEpoch())
@@ -2027,6 +2098,8 @@ void LemonServer::setupFileRoutes() {
 		             if (! resolvePath(manager->currentDir(), queryValue(req, "root"), queryValue(req, "path"),
 		                               &abs, nullptr, &error))
 			             return errorResponse(Status::BadRequest, error);
+		             if (auto r = checkSourceOwner(req, abs, true))
+			             return std::move(*r);
 		             int files = 0;
 		             if (! extractZip(req.body(), abs, queryFlag(req, "stripTop"), &files, &error))
 			             return errorResponse(Status::BadRequest, error);
@@ -2047,6 +2120,8 @@ void LemonServer::setupFileRoutes() {
 		             if (! resolvePath(manager->currentDir(), body["root"].toString(), body["path"].toString(), &abs,
 		                               nullptr, &error))
 			             return errorResponse(Status::BadRequest, error);
+		             if (auto r = checkSourceOwner(req, abs, true))
+			             return std::move(*r);
 		             if (! QDir().mkpath(abs))
 			             return errorResponse(Status::InternalServerError, tr("Cannot create folder %1").arg(abs));
 		             return okResponse();

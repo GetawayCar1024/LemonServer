@@ -626,12 +626,68 @@ bool ContestManager::setArchived(bool archived, QString *error) {
 
 bool ContestManager::setPublic(bool visible, QString *error) {
 	if (! contest) { *error = tr("No contest yet"); return false; }
-	if (isArchived(contestName)) { *error = tr("This contest is archived. Unarchive it before making changes."); return false; }
 	auto next = props(); next["public"] = visible;
 	if (! saveProperties(currentDir(), next, error)) return false;
 	loaded[contestName].properties = next;
 	touch(contestName, false);
 	return true;
+}
+
+namespace {
+	// contestant folder names are case-insensitive on Windows
+	QString ownerKey(const QString &who) {
+#ifdef Q_OS_WIN
+		return who.toLower();
+#else
+		return who;
+#endif
+	}
+} // namespace
+
+QJsonObject ContestManager::propertiesOf(const QString &requested) const {
+	if (! isValidContestName(requested)) return {};
+	const auto name = canonicalName(requested);
+	return loaded.contains(name) ? loaded.value(name).properties : readProperties(contestDir(name));
+}
+
+QString ContestManager::ownerOf(const QString &who) const { return props()["owners"].toObject()[ownerKey(who)].toString(); }
+
+bool ContestManager::ownedBy(const QString &contestName, const QString &who, const QString &owner) const {
+	return ! owner.isEmpty() && propertiesOf(contestName)["owners"].toObject()[ownerKey(who)].toString() == owner;
+}
+
+bool ContestManager::claimContestant(const QString &who, const QString &owner, bool *conflict, QString *error) {
+	*conflict = false;
+	if (! contest) { *error = tr("No contest yet"); return false; }
+	const QString current = ownerOf(who);
+	if (current == owner) return true;
+	if (! current.isEmpty()) { *conflict = true; return false; }
+	auto next = props();
+	auto owners = next["owners"].toObject();
+	owners[ownerKey(who)] = owner;
+	next["owners"] = owners;
+	if (! saveProperties(currentDir(), next, error)) return false;
+	loaded[contestName].properties = next;
+	touch(contestName, false);
+	return true;
+}
+
+void ContestManager::releaseContestant(const QString &who) {
+	if (! contest || ownerOf(who).isEmpty()) return;
+	auto next = props();
+	auto owners = next["owners"].toObject();
+	owners.remove(ownerKey(who));
+	next["owners"] = owners;
+	if (saveProperties(currentDir(), next, nullptr)) loaded[contestName].properties = next;
+	touch(contestName, false);
+}
+
+void ContestManager::restrictToOwner(const QString &contestName, const QJsonObject &request, QMap<QString, QVector<int>> *mapping) const {
+	const QString owner = request["owner"].toString();
+	if (owner.isEmpty()) return;
+	const auto owners = propertiesOf(contestName)["owners"].toObject();
+	for (auto it = mapping->begin(); it != mapping->end();)
+		it = owners[ownerKey(it.key())].toString() == owner ? std::next(it) : mapping->erase(it);
 }
 
 QString ContestManager::downZip() const { return props()["downZip"].toString(); }
@@ -1154,6 +1210,7 @@ QJsonObject ContestManager::jobJson(const Job &job, int position) const {
 	return {{"id", double(job.id)},
 	        {"contest", job.contest},
 	        {"mode", job.mode()},
+	        {"owner", job.request["owner"].toString()}, // the CodeHub server that queued it, if any
 	        {"queued", job.queued.toString(Qt::ISODate)},
 	        {"position", position}};
 }
@@ -1179,6 +1236,7 @@ bool ContestManager::enqueueJudge(const QJsonObject &request, QJsonObject *job, 
 	QMap<QString, QVector<int>> mapping;
 	if (! judgeCells(contest, request, &mapping, error))
 		return false;
+	restrictToOwner(contestName, request, &mapping);
 	for (const auto &indices : mapping) for (const int index : indices) {
 		QString invalid;
 		if (!LemonServerJson::validateTaskFileNames(contest->getTask(index), &invalid)) {
@@ -1317,8 +1375,10 @@ void ContestManager::startNext() {
 				saveContest(job.contest);
 			}
 			QMap<QString, QVector<int>> mapping;
-			if (judgeCells(c, job.request, &mapping, &error))
+			if (judgeCells(c, job.request, &mapping, &error)) {
+				restrictToOwner(job.contest, job.request, &mapping);
 				list = judgeList(c, mapping, &total, &count);
+			}
 			if (list.isEmpty() && error.isEmpty())
 				error = tr("Nothing to judge");
 		}
