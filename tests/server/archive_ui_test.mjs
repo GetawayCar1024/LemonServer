@@ -15,7 +15,11 @@ await withBrowser(async ({ api, js, wait, send, click, open, origin }) => {
     await js(`(()=>{const page=document.querySelector('.page');const item=document.querySelector('[data-contest="${name}"]');page.scrollTop=item.offsetTop-page.offsetTop-200;return page.scrollTop;})()`);
     return js(`document.querySelector('.page').scrollTop`);
   };
-  const scrollTop = () => js(`document.querySelector('.page').scrollTop`);
+  // the same position, or the end of a list that became shorter (the browser then clamps scrollTop)
+  const kept = async (top, message) => {
+    const [now, limit] = await js(`(()=>{const page=document.querySelector('.page');return [page.scrollTop, page.scrollHeight-page.clientHeight];})()`);
+    assert.ok(Math.abs(now - Math.min(top, limit)) <= 1 && now > 0, `${message}: ${now} (was ${top}, max ${limit})`);
+  };
 
   await send('Page.navigate', { url: origin + '/?qa=archives#/archives' });
   await wait(`!!document.querySelector('[data-contest="round-10"]')`);
@@ -26,17 +30,17 @@ await withBrowser(async ({ api, js, wait, send, click, open, origin }) => {
   await accept();
   await wait(`document.querySelector('[data-public="round-10"]')?.textContent === '取消公开' && document.querySelector('[data-contest="round-10"]') !== window.marker`);
   assert.equal((await api('GET', '/api/contests/round-10')).public, true);
-  assert.equal(await scrollTop(), top, 'making an archived contest public keeps the scroll position');
+  await kept(top, 'making an archived contest public keeps the scroll position');
   await js(`document.querySelector('[data-public="round-10"]').click()`);
   await wait(`document.querySelector('[data-public="round-10"]')?.textContent === '公开'`);
   assert.equal((await api('GET', '/api/contests/round-10')).public, false);
-  assert.equal(await scrollTop(), top);
+  await kept(top, 'making it private again keeps the scroll position');
 
   await js(`document.querySelector('[data-contest="round-11"] [data-unarchive]').click()`);
   await accept();
   await wait(`!document.querySelector('[data-contest="round-11"]')`);
   assert.equal((await api('GET', '/api/contests/round-11')).archived, false);
-  assert.equal(await scrollTop(), top, 'unarchiving keeps the scroll position');
+  await kept(top, 'unarchiving keeps the scroll position');
   console.log('PASS archived contests can be made public or private; list actions keep the scroll position');
 
   await js(`location.hash='#/contests'`);
@@ -47,9 +51,7 @@ await withBrowser(async ({ api, js, wait, send, click, open, origin }) => {
   await accept();
   await wait(`!document.querySelector('[data-contest="round-20"]')`);
   assert.equal((await api('GET', '/api/contests/round-20')).archived, true);
-  const limit = await js(`(()=>{const page=document.querySelector('.page');return page.scrollHeight-page.clientHeight;})()`);
-  assert.equal(await scrollTop(), Math.min(top, limit), 'archiving keeps the scroll position (the shorter list may end sooner)');
-  assert.ok(await scrollTop() > 0);
+  await kept(top, 'archiving keeps the scroll position');
   console.log('PASS archiving from the contest list keeps the scroll position');
 
   await js(`location.hash='#/archives'`);
