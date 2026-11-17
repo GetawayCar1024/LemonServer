@@ -31,8 +31,9 @@ await withBrowser(async ({ api, js, wait, send, click, open, delay }) => {
   await js(`[...document.querySelectorAll('.topbar button')].find(button=>button.textContent==='登录').click()`);
   await wait('!!document.querySelector(".login-box")');
   assert.equal(await js(`(()=>{const previous=sessionStorage.getItem('lemonserver.loginReturn');sessionStorage.setItem('lemonserver.loginReturn','https://example.org/');const safe=loginReturn();sessionStorage.setItem('lemonserver.loginReturn',previous);return safe;})()`), '#/contests');
+  await js('window.__workflowReloadMarker = true');
   await send('Page.reload');
-  await wait('!!document.querySelector(".login-box input")');
+  await wait('window.__workflowReloadMarker !== true && !!document.querySelector(".login-box input")');
   await js(`document.querySelector('.login-box input').value='123456';document.querySelector('.login-box button.primary').click()`);
   await wait('S.status.authenticated && !!document.querySelector(".results")');
   assert.equal(await js('location.hash'), target, 'login returns to the page from which it was opened');
