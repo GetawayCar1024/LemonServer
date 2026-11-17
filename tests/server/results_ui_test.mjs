@@ -77,12 +77,13 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
 
   await js(`S.judgeTasks=null;route()`);
   await wait('!!document.querySelector("[data-judge-scope]")');
-  const before = await order();
-  await js(`S.contest.contestants.find(ct=>ct.name==='carol').totalScore=500;rerenderResults({keepOrder:true})`);
-  assert.deepEqual(await order(), before, 'rows keep their places while results come in');
-  await js('rerenderResults()');
+  await js(`S.contest.contestants.find(ct=>ct.name==='carol').totalScore=500;S.resultSort={key:'total',direction:-1};rerenderResults()`);
   assert.equal((await order())[0], 'carol');
-  console.log('PASS result rows stay in place during judging and are sorted afterwards');
+  const scroll = await js(`(()=>{for(let i=0;i<60;i++) S.contest.contestants.push({...S.contest.contestants[0],name:'scroll-'+i});rerenderResults();const wrap=document.querySelector('.results-wrap');wrap.scrollTop=600;return wrap.scrollTop;})()`);
+  await js(`S.contest.contestants.find(ct=>ct.name==='bob').totalScore=600;rerenderResults()`);
+  assert.equal((await order())[0], 'bob');
+  assert.equal(await js(`document.querySelector('.results-wrap').scrollTop`), scroll);
+  console.log('PASS live score sorting preserves the vertical scroll offset');
 
   await js(`S.resultSel=new Set(['bob|1']);S.resultAnchor='bob|1';S.resultSort={key:'task:1',direction:-1};location.hash='#/contest/result-test/tasks'`);
   await wait('!!document.querySelector(".tree-list")');

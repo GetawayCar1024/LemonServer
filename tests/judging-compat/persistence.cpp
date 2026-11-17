@@ -6,6 +6,7 @@
 #include "core/testcase.h"
 #include <QCoreApplication>
 #include <QDataStream>
+#include <QDir>
 #include <QJsonArray>
 #include <cstdio>
 #include <stdexcept>
@@ -28,6 +29,10 @@ int main(int argc, char **argv) {
 	int sentinel = 0; input >> sentinel;
 	require(testCase.getFullScore() == 75 && testCase.getTimeLimit() == 1200 && testCase.getMemoryLimit() == 256 && sentinel == 9876, "legacy TestCase stream alignment");
 	require(testCase.getInputFiles() == QStringList{"1.in"}, "legacy input paths");
+	TestCase mixedPaths;
+	require(mixedPaths.readFromJson({{"fullScore", 1}, {"inputFiles", QJsonArray{"folder\\1.in"}}, {"outputFiles", QJsonArray{"folder/1.out"}}}) == 0, "load mixed-platform paths");
+	require(mixedPaths.getInputFiles() == QStringList{QString("folder") + QDir::separator() + "1.in"}
+	        && mixedPaths.getOutputFiles() == QStringList{QString("folder") + QDir::separator() + "1.out"}, "CDF loader must normalize both input and output paths like the web editor");
 
 	bytes.clear();
 	{

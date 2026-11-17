@@ -8,6 +8,7 @@
 #include "contestmanager.h"
 #include "jsonapi.h"
 #include "serverconfig.h"
+#include "durablefile.h"
 
 #include "base/LemonLog.hpp"
 #include "base/LemonUtils.hpp"
@@ -18,6 +19,7 @@
 #include "core/testcase.h"
 
 #include <QDataStream>
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -428,13 +430,16 @@ bool ContestManager::importContest(const QString &stagingDir, QString name, bool
 Contest *ContestManager::loadContest(const QString &filePath, QString *error) {
 	// LemonLime::loadContest()
 	auto *newContest = new Contest(this);
-	QFile file(filePath);
-
-	if (! file.open(QFile::ReadOnly)) {
-		*error = tr("Cannot open file %1").arg(QFileInfo(filePath).fileName());
+	QByteArray serialized;
+	bool recovered = false;
+	if (!LemonPersistence::read(filePath, &serialized, &recovered, error)) {
 		delete newContest;
 		return nullptr;
 	}
+	QBuffer file(&serialized);
+	file.open(QIODevice::ReadOnly);
+	newContest->setProperty("recoveredFromBackup", recovered);
+	if (recovered) WARN("Recovered contest from backup:", QFileInfo(filePath).fileName());
 	char firstChar = 0;
 	file.peek(&firstChar, 1);
 	newContest->setSettings(settings);
@@ -480,7 +485,7 @@ Contest *ContestManager::loadContest(const QString &filePath, QString *error) {
 void ContestManager::addLoaded(const QString &name, Contest *c, const QString &cdfFile) {
 	c->setContestDirectory(contestDir(name));
 	connectContest(c);
-	loaded.insert(name, Loaded{c, cdfFile, readProperties(contestDir(name)), QDateTime::currentDateTimeUtc(), false, nextRevision++});
+	loaded.insert(name, Loaded{c, cdfFile, readProperties(contestDir(name)), QDateTime::currentDateTimeUtc(), c->property("recoveredFromBackup").toBool(), nextRevision++});
 	evictIdleContests(name);
 }
 
@@ -575,10 +580,11 @@ const QJsonObject &ContestManager::props() const {
 }
 
 QJsonObject ContestManager::readProperties(const QString &dir) {
-	QFile f(QDir(dir).absoluteFilePath(kPropertiesFile));
-	if (! f.open(QFile::ReadOnly))
-		return {};
-	auto props = QJsonDocument::fromJson(f.readAll()).object();
+	QByteArray bytes;
+	bool recovered = false;
+	if (!LemonPersistence::read(QDir(dir).absoluteFilePath(kPropertiesFile), &bytes, &recovered)) return {};
+	auto props = QJsonDocument::fromJson(bytes).object();
+	if (recovered) props["public"] = false; // Never accidentally restore an older public-sharing grant.
 	// the contest time of LemonServer 0.1.5 and earlier is no longer used
 	props.remove("startTime");
 	props.remove("endTime");
@@ -586,14 +592,7 @@ QJsonObject ContestManager::readProperties(const QString &dir) {
 }
 
 bool ContestManager::saveProperties(const QString &dir, const QJsonObject &properties, QString *error) {
-	QSaveFile file(QDir(dir).absoluteFilePath(kPropertiesFile));
-	if (file.open(QFile::WriteOnly)) {
-		const auto bytes = QJsonDocument(properties).toJson(QJsonDocument::Indented);
-		if (file.write(bytes) == bytes.size() && file.commit())
-			return true;
-	}
-	if (error) *error = tr("Cannot write file %1").arg(kPropertiesFile);
-	return false;
+	return LemonPersistence::write(QDir(dir).absoluteFilePath(kPropertiesFile), QJsonDocument(properties).toJson(QJsonDocument::Indented), error);
 }
 
 bool ContestManager::writeProperties(QString *error) { return saveProperties(currentDir(), props(), error); }
@@ -753,21 +752,10 @@ bool ContestManager::saveContest(const QString &name, QString *error) {
 	if (it->properties["archived"].toBool(false))
 		return true; // Reads, eviction and shutdown must not rewrite an archived CDF.
 	if (!it->dirty) return true;
-	QSaveFile file(QDir(contestDir(name)).absoluteFilePath(it->cdfFile));
-	if (! file.open(QFile::WriteOnly)) {
-		if (error)
-			*error = tr("Cannot open file %1").arg(it->cdfFile);
-		WARN(it->cdfFile, "Save Failed");
-		return false;
-	}
 	QJsonObject out;
 	it->contest->writeToJson(out);
 	const auto bytes = QJsonDocument(out).toJson(QJsonDocument::Compact);
-	if (file.write(bytes) != bytes.size() || ! file.commit()) {
-		if (error)
-			*error = tr("Cannot write file %1").arg(it->cdfFile);
-		return false;
-	}
+	if (!LemonPersistence::write(QDir(contestDir(name)).absoluteFilePath(it->cdfFile), bytes, error)) return false;
 	lastSaved[name] = QDateTime::currentDateTimeUtc();
 	it->dirty = false;
 	return true;

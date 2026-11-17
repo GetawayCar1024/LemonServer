@@ -329,7 +329,7 @@ std::optional<QHttpServerResponse> LemonServer::denied(const QHttpServerRequest 
 		const auto suffix = path.mid(prefix.size() + name.size());
 		const auto body = QJsonDocument::fromJson(req.body()).object();
 		const bool onlyPublic = suffix.isEmpty() && req.method() == Method::Put && body.size() == 1 && body.contains("public");
-		if (suffix != "/archive" && suffix != "/clone" && ! onlyPublic && manager->isArchived(name))
+		if (suffix != "/archive" && suffix != "/clone" && suffix != "/files/download-selection" && ! onlyPublic && manager->isArchived(name))
 			return QHttpServerResponse(QJsonObject{{"error", tr("This contest is archived. Unarchive it before making changes.")}, {"archived", true}}, Status::Conflict);
 	}
 	return std::nullopt;
@@ -743,7 +743,7 @@ void LemonServer::setupAuthRoutes() {
 		if (token.size() < 4)
 			return errorResponse(Status::BadRequest, tr("The new token must have at least 4 characters"));
 		config->setToken(token);
-		config->save();
+		if (!config->save()) { config->load(); return errorResponse(Status::InternalServerError, "Cannot save access token"); }
 		// all sessions are invalidated, hand out a fresh one for the caller
 		return jsonResponse(QJsonObject{{"ok", true}, {"session", config->newSession()}});
 	});
@@ -916,7 +916,7 @@ void LemonServer::setupSettingsRoutes() {
 		if (! QDir().mkpath(root))
 			return errorResponse(Status::BadRequest, tr("Cannot create folder %1").arg(root));
 		manager->closeAll();
-		config->setContestRoot(root);
+		if (!config->setContestRoot(root)) return errorResponse(Status::InternalServerError, "Cannot save contest folder");
 		QDir::setCurrent(config->contestRoot());
 		return okResponse({{"contestRoot", QDir::toNativeSeparators(config->contestRoot())}});
 	});
@@ -1896,6 +1896,57 @@ void LemonServer::setupPublicRoutes() {
 }
 
 void LemonServer::setupFileRoutes() {
+	server.route("/api/contests/<arg>/files/download-selection", Method::Post,
+	             [this](const QString &name, const QHttpServerRequest &req) {
+		             if (auto r = denied(req)) return std::move(*r);
+		             Contest *contest = nullptr;
+		             if (auto r = withContest(name, &contest)) return std::move(*r);
+		             bool ok = false;
+		             const auto body = parseBody(req, &ok);
+		             const auto paths = body["paths"].toArray();
+		             if (!ok || paths.isEmpty() || paths.size() > 1000) return errorResponse(Status::BadRequest, "Select 1 to 1000 files or folders");
+		             QString base, error;
+		             if (!resolvePath(manager->currentDir(), body["root"].toString(), body["base"].toString(), &base, nullptr, &error)) return errorResponse(Status::BadRequest, error);
+		             if (!QFileInfo(base).isDir()) return errorResponse(Status::BadRequest, "Selection base is not a directory");
+		             QStringList files;
+		             QSet<QString> seen;
+		             qint64 bytes = 0;
+		             for (const auto &path : paths) {
+			             QString abs;
+			             if (!path.isString() || !resolvePath(manager->currentDir(), body["root"].toString(), path.toString(), &abs, nullptr, &error) || !sameOrInside(abs, base)) return errorResponse(Status::BadRequest, "Invalid selected path");
+			             if (!QFileInfo::exists(abs)) return errorResponse(Status::NotFound, "Selected path does not exist");
+			             QStringList items{abs};
+			             if (QFileInfo(abs).isDir()) {
+				             QDirIterator it(abs, QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden, QDirIterator::Subdirectories);
+				             while (it.hasNext() && items.size() <= 50000) items.append(it.next());
+				             if (items.size() > 50000) return errorResponse(Status::BadRequest, "Selection is too large");
+			             }
+			             for (const auto &item : items) {
+				             if (seen.contains(item)) continue;
+				             const QFileInfo info(item);
+				             if (info.isSymLink()) return errorResponse(Status::BadRequest, "Symbolic links are not downloadable");
+				             if (auto r = checkSourceOwner(req, item, false)) return std::move(*r);
+				             seen.insert(item); files.append(item); bytes += info.isFile() ? info.size() : 0;
+				             if (files.size() > 50000 || bytes > 512ll * 1024 * 1024) return errorResponse(Status::BadRequest, "Selection is too large; download fewer items");
+			             }
+		             }
+		             QBuffer buffer; buffer.open(QIODevice::WriteOnly);
+		             QZipWriter zip(&buffer);
+		             for (const auto &item : files) {
+			             const QFileInfo info(item);
+			             const auto entry = QDir(base).relativeFilePath(item);
+			             if (entry == ".") continue;
+			             if (info.isDir()) zip.addDirectory(entry);
+			             else {
+				             QFile file(item);
+				             if (!file.open(QIODevice::ReadOnly)) return errorResponse(Status::InternalServerError, "Cannot read selected file");
+				             zip.setCreationPermissions(file.permissions()); zip.addFile(entry, file.readAll());
+			             }
+		             }
+		             zip.close();
+		             if (zip.status() != QZipWriter::NoError) return errorResponse(Status::InternalServerError, "Cannot create download archive");
+		             return downloadResponse("application/zip", buffer.data(), "selection.zip");
+	             });
 	// List a directory: ?root=data|source|contest&path=sub/dir[&recursive=1]
 	server.route("/api/contests/<arg>/files", Method::Get, [this](const QString &name, const QHttpServerRequest &req) {
 		if (auto r = denied(req))
@@ -1959,6 +2010,8 @@ void LemonServer::setupFileRoutes() {
 				             QDirIterator it(abs, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
 				             while (it.hasNext()) {
 					             it.next();
+					             if (auto r = checkSourceOwner(req, it.filePath(), false)) return std::move(*r);
+					             if (it.fileInfo().isSymLink()) return errorResponse(Status::BadRequest, "Symbolic links are not downloadable");
 					             QFile f(it.filePath());
 					             if (! f.open(QFile::ReadOnly))
 						             continue;

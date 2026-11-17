@@ -21,12 +21,12 @@ export async function withServer(run) {
     assert.equal(response.status, options.expect ?? 200, `${method} ${endpoint}: ${JSON.stringify(data).slice(0, 400)}`);
     return data;
   };
-  const start = async () => {
+  const start = async (loginToken = '123456') => {
     const env = { ...process.env, ...(process.platform === 'win32' ? { PATH: 'E:\\MinGW64\\bin;' + process.env.PATH } : {}) };
     child = spawn(path.resolve(process.argv[2]), ['--host', '127.0.0.1', '--port', String(port), '--config', path.join(home, 'server.json')], { cwd: home, env, windowsHide: true, stdio: 'ignore' });
     for (let i = 0; i < 200; i++) {
       if (await fetch(origin + '/api/auth/status').then(response => response.ok).catch(() => false)) {
-        token = (await api('POST', '/api/auth/login', { token: '123456' })).session;
+        token = (await api('POST', '/api/auth/login', { token: loginToken })).session;
         return;
       }
       assert.equal(child.exitCode, null, 'server exited during startup'); await pause(50);
@@ -46,6 +46,6 @@ export async function withServer(run) {
   try {
     await start();
     await api('PUT', '/api/setup', { contestRoot: path.join(home, 'contests') });
-    await run({ home, origin, api, request, idle, pause, restart: async () => { await stop(); await start(); } });
+    await run({ home, origin, api, request, idle, pause, restart: async (options = {}) => { await stop(); await start(options.loginToken); } });
   } finally { await stop(); await fs.rm(home, { recursive: true, force: true, maxRetries: 12, retryDelay: 200 }); }
 }

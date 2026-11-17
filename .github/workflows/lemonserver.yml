@@ -113,6 +113,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/server/workflow_ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/reliability_test.mjs "$env:PKG\LemonServer.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/server/new_workflow_ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/server/task_paths_test.py "$env:PKG\LemonServer.exe" --embedded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/server/ui_test.mjs "$env:PKG\LemonServer.exe" --embedded
@@ -202,6 +206,8 @@ jobs:
           node tests/server/public_features_test.mjs "$PWD/build/LemonServer"
           node tests/server/performance_test.mjs "$PWD/build/LemonServer"
           node tests/server/workflow_ui_test.mjs "$PWD/build/LemonServer" --embedded
+          node tests/server/reliability_test.mjs "$PWD/build/LemonServer"
+          node tests/server/new_workflow_ui_test.mjs "$PWD/build/LemonServer" --embedded
           python3 tests/server/task_paths_test.py "$PWD/build/LemonServer" --embedded
           node tests/server/ui_test.mjs "$PWD/build/LemonServer" --embedded
           node tests/server/editor_ui_test.mjs "$PWD/build/LemonServer" --embedded

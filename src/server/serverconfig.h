@@ -43,7 +43,7 @@ class ServerConfig {
 
 	// default contest folder
 	const QString &contestRoot() const { return root; }
-	void setContestRoot(const QString &dir);
+	bool setContestRoot(const QString &dir);
 
   private:
 	struct ApiKey {

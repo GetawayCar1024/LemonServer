@@ -6,6 +6,7 @@
  */
 
 #include "serverconfig.h"
+#include "durablefile.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -31,13 +32,13 @@ QString ServerConfig::randomHex(int bytes) {
 
 bool ServerConfig::load() {
 	QFile file(filePath);
-	if (! file.exists()) {
+	if (! file.exists() && !QFileInfo::exists(filePath + ".bak")) {
 		setToken(defaultToken);
 		return save();
 	}
-	if (! file.open(QFile::ReadOnly))
-		return false;
-	const auto obj = QJsonDocument::fromJson(file.readAll()).object();
+	QByteArray bytes;
+	if (!LemonPersistence::read(filePath, &bytes)) return false;
+	const auto obj = QJsonDocument::fromJson(bytes).object();
 	tokenSalt = obj.value("tokenSalt").toString();
 	tokenHash = obj.value("tokenHash").toString();
 	isDefaultToken = obj.value("tokenIsDefault").toBool(false);
@@ -49,10 +50,7 @@ bool ServerConfig::load() {
 		                k.value("hash").toString(), k.value("preview").toString(),
 		                k.value("created").toString(), k.value("lastUsed").toString()});
 	}
-	if (tokenHash.isEmpty()) {
-		setToken(defaultToken);
-		save();
-	}
+	if (tokenHash.isEmpty() || tokenSalt.isEmpty()) return false;
 	return true;
 }
 
@@ -74,11 +72,7 @@ bool ServerConfig::save() const {
 	}
 	obj["apiKeys"] = keys;
 	QDir().mkpath(QFileInfo(filePath).absolutePath());
-	QSaveFile file(filePath);
-	if (! file.open(QFile::WriteOnly))
-		return false;
-	file.write(QJsonDocument(obj).toJson());
-	return file.commit();
+	return LemonPersistence::write(filePath, QJsonDocument(obj).toJson());
 }
 
 bool ServerConfig::checkToken(const QString &token) const {
@@ -164,7 +158,10 @@ QJsonArray ServerConfig::listApiKeys() const {
 	return arr;
 }
 
-void ServerConfig::setContestRoot(const QString &dir) {
+bool ServerConfig::setContestRoot(const QString &dir) {
+	const auto previous = root;
 	root = QDir::cleanPath(QDir(dir).absolutePath());
-	save();
+	if (save()) return true;
+	root = previous;
+	return false;
 }

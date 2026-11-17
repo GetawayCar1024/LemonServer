@@ -258,9 +258,9 @@ function promptDlg(title, value = '', placeholder = '') {
   });
 }
 
-async function download(path, fallbackName) {
+async function download(path, fallbackName, body) {
   try {
-    const res = await api('GET', path, undefined, { blob: true });
+    const res = await api(body ? 'POST' : 'GET', path, body, { blob: true });
     const blob = await res.blob();
     let name = fallbackName;
     const m = /filename\*=UTF-8''([^;]+)/i.exec(res.headers.get('Content-Disposition') || '');
@@ -592,7 +592,7 @@ async function renderContestList(archived = false) {
   importCard.addEventListener('dragover', (e) => { e.preventDefault(); importCard.style.boxShadow = '0 0 0 2px var(--blue)'; });
   importCard.addEventListener('dragleave', () => { importCard.style.boxShadow = ''; });
   importCard.addEventListener('drop', async (e) => {
-    e.preventDefault();
+    e.preventDefault(); e.stopPropagation();
     importCard.style.boxShadow = '';
     const items = await collectDroppedFiles(e);
     if (items.length === 1 && /\.zip$/i.test(items[0].file.name)) importContestZip(items[0].file);
@@ -607,6 +607,20 @@ async function renderContestList(archived = false) {
     h('div', { class: 'card' },
       h('h2', null, archived ? '已存档比赛' : admin ? '当前比赛' : '公开比赛'),
       contests.length ? items : h('div', { class: 'empty' }, archived ? '暂无存档比赛' : admin ? '暂无比赛' : '暂无公开比赛')))));
+  if (admin && !archived) {
+    const page = document.querySelector('#app .page');
+    const acceptFiles = async event => {
+      event.preventDefault();
+      const items = await collectDroppedFiles(event);
+      if (items.length === 1 && /\.zip$/i.test(items[0].file.name)) importContestZip(items[0].file);
+      else if (items.length) importContestFolder(items);
+    };
+    page.addEventListener('dragover', event => { if ([...event.dataTransfer.types].includes('Files')) event.preventDefault(); });
+    page.addEventListener('drop', acceptFiles);
+    page.addEventListener('paste', event => {
+      if (!typing(event) && !$('#modal-root').childElementCount && event.clipboardData?.files.length) acceptFiles({ preventDefault: () => event.preventDefault(), dataTransfer: event.clipboardData });
+    });
+  }
   if (admin && !archived) name.focus();
   if (admin) checkJudgeStatus();
 }
@@ -694,7 +708,7 @@ async function renderPublicContest(name) {
       const value = await api('GET', publicPath(name));
       if (generation !== publicGeneration || isAdmin()) return;
       if (S.contest !== value) {
-        S.contest = value; renderPublicStatus(); rerenderResults({ keepOrder: value.busy });
+        S.contest = value; renderPublicStatus(); rerenderResults();
       }
       if (S.publicProgress?.open) refreshPublicProgress(generation);
     } catch (error) {
@@ -1317,7 +1331,7 @@ function renderTaskEditor(editor, i) {
   });
 
   const grid = h('div', { class: 'form-grid' },
-    field('名称', titleInput),
+    field('显示名称', titleInput, '可用中文，不影响源文件名'),
     field('类型', typeSeg),
     isProgram && !isComm ? field('源程序名', text('sourceFileName', { id: 'f-src', placeholder: '英文文件名，不含扩展名', maxlength: 64 })) : null,
     isProgram ? field('', check('subFolderCheck', '源程序在选手的同名子文件夹中')) : null,
@@ -1792,11 +1806,16 @@ async function openTestCaseManager(taskIndex) {
         });
       });
     };
-    modal({
+    const body = h('div', { class: 'form-grid', style: { gridTemplateColumns: '110px 1fr' } }, sc.row, tl.row, ml.row, tot.row);
+    const applyAndSave = async close => { if (apply() !== false) { close(true); await save(); } };
+    const dialog = modal({
       title: selected.length ? `修改 ${targets.length} 个子任务` : `修改全部 ${targets.length} 个子任务`,
-      body: h('div', { class: 'form-grid', style: { gridTemplateColumns: '110px 1fr' } }, sc.row, tl.row, ml.row, tot.row),
+      body,
       buttons: [{ label: '取消' }, { label: '应用', primary: true, onClick: apply }],
-      onSaveKey: async (close) => { if (apply() !== false) { close(true); await save(); } },
+      onSaveKey: applyAndSave,
+    });
+    body.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); applyAndSave(dialog.close).catch(fail); }
     });
   };
 
@@ -2242,12 +2261,14 @@ function rerenderResults(options = {}) {
   // not in the middle of a drag selection: try again when it is done
   if (S.resultDrag) { setTimeout(() => rerenderResults(options), 300); return; }
   const wrap = page.querySelector('.results-wrap');
+  const pageTop = page.scrollTop, windowTop = window.scrollY;
   const top = wrap ? wrap.scrollTop : 0, left = wrap ? wrap.scrollLeft : 0;
   const next = h('div');
   renderResultsTab(next, options);
   page.replaceChildren(...next.childNodes);
   const fresh = page.querySelector('.results-wrap');
   if (fresh) { fresh.scrollTop = top; fresh.scrollLeft = left; }
+  page.scrollTop = pageTop; window.scrollTo(window.scrollX, windowTop);
 }
 
 function renderResultsTab(page, options = {}) {
@@ -2554,6 +2575,7 @@ async function fsList(path) {
 }
 
 const fsDownload = (path, name) => download(cpath() + '/files/download' + qs({ root: 'contest', path }), name);
+const fsDownloadMany = paths => download(cpath() + '/files/download-selection', 'selection.zip', { root: 'contest', base: S.fs.path, paths });
 
 async function fsTransfer(mode, paths, to) {
   const r = await api('POST', cpath() + '/files/' + mode, { root: 'contest', paths, to });
@@ -2860,12 +2882,12 @@ async function renderFilesTab(page) {
     const one = sel.length === 1 ? sel[0] : null;
     if (readOnly) return showMenu(x, y, [
       one ? { label: one.dir ? '打开' : '查看', kbd: 'Enter', onClick: () => openEntry(one) } : null,
-      { label: '下载', onClick: () => sel.forEach(entry => fsDownload(full(entry.name), entry.dir ? entry.name + '.zip' : entry.name)) },
+      { label: '下载', onClick: () => sel.length > 1 ? fsDownloadMany(sel.map(entry => full(entry.name))) : fsDownload(full(sel[0].name), sel[0].dir ? sel[0].name + '.zip' : sel[0].name) },
     ]);
     showMenu(x, y, [
       one ? { label: one.dir ? '打开' : one.size < EDIT_LIMIT ? '编辑' : '下载', kbd: 'Enter', onClick: () => openEntry(one) } : null,
       compilable(one) ? { label: '编译（Testlib for Lemons）…', kbd: 'Ctrl+B', onClick: compileSelected } : null,
-      { label: sel.length > 1 ? `下载 ${sel.length} 项…` : '下载', onClick: () => sel.forEach((e) => fsDownload(full(e.name), e.dir ? e.name + '.zip' : e.name)) },
+      { label: sel.length > 1 ? `下载 ${sel.length} 项…` : '下载', onClick: () => sel.length > 1 ? fsDownloadMany(sel.map(entry => full(entry.name))) : fsDownload(full(sel[0].name), sel[0].dir ? sel[0].name + '.zip' : sel[0].name) },
       'sep',
       { label: '复制', kbd: 'Ctrl+C', onClick: () => setClip('copy') },
       { label: '剪切', kbd: 'Ctrl+X', onClick: () => setClip('cut') },
@@ -2929,7 +2951,7 @@ async function renderFilesTab(page) {
         'sep',
         { label: '从 Testlib 模板新建…', onClick: fromTemplate },
       ]) }, '新建 ▾'),
-      h('button', { onclick: () => fsDownload(F.path, (F.path.split('/').pop() || S.contest.name) + '.zip'), title: '打包下载当前文件夹' }, '下载'),
+      h('button', { onclick: () => F.selected.size ? fsDownloadMany([...F.selected].map(full)) : fsDownload(F.path, (F.path.split('/').pop() || S.contest.name) + '.zip'), title: '打包下载选中项，未选择时下载当前文件夹' }, '下载'),
       h('button', { onclick: showHelp, title: '快捷键' }, '?')));
 
   // ---------- listing ----------
@@ -3397,7 +3419,7 @@ async function pollJudge() {
     const cur = S.contest && location.hash.includes('/contest/') ? S.contest.name : null;
     const onResults = location.hash.includes('/results');
     if (cur && st.contest === cur && onResults && st.events.some((e) => e.type === 'taskFinished' || e.type === 'finished')) {
-      if (st.events.some((e) => e.type === 'finished')) S.resultResort = true; // sort again once the run is over
+      S.resultResort = true; // Completed results are sorted immediately without changing scroll offsets.
       refreshResultsQuietly();
     }
     // the open contest became busy / editable again
