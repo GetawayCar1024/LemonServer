@@ -157,9 +157,13 @@ jobs:
 
       - name: Install build tools
         run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update
-          sudo apt-get install -y g++-13 ninja-build patchelf libgl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libegl1 libopengl0 bubblewrap
+          sudo add-apt-repository -y --no-update ppa:ubuntu-toolchain-r/test
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::Languages=none -o APT::Update::Error-Mode=any update
+          compiler_version=$(apt-cache policy g++-13 | awk '/Candidate:/ {print $2}')
+          test -n "$compiler_version"
+          test "$compiler_version" != '(none)'
+          sudo apt-get -o Acquire::Retries=3 install -y "g++-13=$compiler_version" ninja-build patchelf libgl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libegl1 libopengl0 bubblewrap
+          command -v g++-13
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4

@@ -21,6 +21,9 @@ await withBrowser(async ({ api, js, wait, send, click, open, delay }) => {
   assert.equal((await api('GET', base + '/tasks/0')).testCases[0].fullScore, 0.375, 'fractional scores can be edited and autosaved in the browser');
   await api('POST', base + '/refresh'); await api('POST', base + '/judge', { mode: 'all' });
   await api('PUT', base, { public: true });
+  // This test exercises controls, not live reordering; do not let a judging refresh replace the
+  // header between pointer-down and pointer-up. Live sorting is covered by results_ui_test.mjs.
+  for (let i = 0; i < 1200; i++) { if (!(await api('GET', '/api/judge/status')).judging) break; await delay(50); }
   await open('workflow', 'results');
   await wait(`!!document.querySelector('[data-result-sort="total"] .sort-icon.desc')`);
   await click('[data-result-sort="name"]');
