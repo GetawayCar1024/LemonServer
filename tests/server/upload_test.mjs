@@ -39,3 +39,45 @@ test('HTTP errors retain their status and network failures reject', async t => {
   const network = upload.request('/upload', { body: new Blob(['x']) });
   Request.last.onerror(); await assert.rejects(network, /上传失败/);
 });
+
+test('unreadable local files fail before a network request and are not called network errors', async t => {
+  const original = globalThis.XMLHttpRequest;
+  globalThis.XMLHttpRequest = Request; Request.last = null;
+  t.after(() => { globalThis.XMLHttpRequest = original; });
+  const file = new File(['data'], 'temporary.cpp');
+  file.arrayBuffer = async () => { throw new DOMException('temporary source vanished', 'NotReadableError'); };
+  let error;
+  const pending = upload.request('/upload', { body: file }).catch(value => { error = value; });
+  await new Promise(resolve => setImmediate(resolve));
+  if (Request.last) Request.last.onerror();
+  await pending;
+  assert.equal(error?.code, 'FILE_READ_FAILED');
+  assert.match(error.message, /temporary\.cpp/);
+  assert.doesNotMatch(error.message, /网络错误/);
+  assert.equal(Request.last, null);
+});
+
+test('virtual dragged files are captured while available and folder paths are retained', async t => {
+  const original = globalThis.XMLHttpRequest;
+  globalThis.XMLHttpRequest = Request;
+  t.after(() => { globalThis.XMLHttpRequest = original; });
+  let readable = true;
+  const file = new File(['from WinRAR'], 'answer.cpp');
+  file.arrayBuffer = async () => { if (!readable) throw new DOMException('gone', 'NotReadableError'); return new TextEncoder().encode('from WinRAR').buffer; };
+  const leaf = { isFile: true, isDirectory: false, name: 'answer.cpp', file: ok => ok(file) };
+  let listed = false;
+  const folder = { isFile: false, isDirectory: true, name: 'round', createReader: () => ({ readEntries: ok => { ok(listed ? [] : [leaf]); listed = true; } }) };
+  const items = await upload.collectFiles({ items: [{ kind: 'file', webkitGetAsEntry: () => folder }], files: [] });
+  readable = false;
+  assert.equal(items[0].rel, 'round/answer.cpp');
+  const pending = upload.request('/upload', { body: items[0].file });
+  assert.equal(await Request.last.body.text(), 'from WinRAR');
+  Request.last.finish(); await pending;
+});
+
+test('folder enumeration failures are reported rather than uploading a partial tree', async () => {
+  const folder = { isDirectory: true, name: 'unreadable', createReader: () => ({ readEntries: (ok, bad) => bad(new DOMException('denied', 'NotReadableError')) }) };
+  await assert.rejects(upload.collectFiles({ items: [{ kind: 'file', webkitGetAsEntry: () => folder }], files: [] }), error => error.code === 'FILE_READ_FAILED' && /unreadable/.test(error.message));
+  folder.createReader = () => { throw new DOMException('provider unavailable', 'NotReadableError'); };
+  await assert.rejects(upload.collectFiles({ items: [{ kind: 'file', webkitGetAsEntry: () => folder }], files: [] }), error => error.code === 'FILE_READ_FAILED');
+});

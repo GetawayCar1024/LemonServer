@@ -594,9 +594,11 @@ async function renderContestList(archived = false) {
   importCard.addEventListener('drop', async (e) => {
     e.preventDefault(); e.stopPropagation();
     importCard.style.boxShadow = '';
-    const items = await collectDroppedFiles(e);
-    if (items.length === 1 && /\.zip$/i.test(items[0].file.name)) importContestZip(items[0].file);
-    else if (items.length) importContestFolder(items);
+    try {
+      const items = await collectDroppedFiles(e);
+      if (items.length === 1 && /\.zip$/i.test(items[0].file.name)) importContestZip(items[0].file);
+      else if (items.length) importContestFolder(items);
+    } catch (error) { fail(error); }
   });
   shell(h('div', { class: 'page' }, h('div', { class: 'narrow' },
     admin && !archived ? h('div', { class: 'card' },
@@ -611,14 +613,18 @@ async function renderContestList(archived = false) {
     const page = document.querySelector('#app .page');
     const acceptFiles = async event => {
       event.preventDefault();
-      const items = await collectDroppedFiles(event);
-      if (items.length === 1 && /\.zip$/i.test(items[0].file.name)) importContestZip(items[0].file);
-      else if (items.length) importContestFolder(items);
+      try {
+        const items = await collectDroppedFiles(event);
+        if (items.length === 1 && /\.zip$/i.test(items[0].file.name)) importContestZip(items[0].file);
+        else if (items.length) importContestFolder(items);
+      } catch (error) { fail(error); }
     };
     page.addEventListener('dragover', event => { if ([...event.dataTransfer.types].includes('Files')) event.preventDefault(); });
     page.addEventListener('drop', acceptFiles);
     page.addEventListener('paste', event => {
-      if (!typing(event) && !$('#modal-root').childElementCount && event.clipboardData?.files.length) acceptFiles({ preventDefault: () => event.preventDefault(), dataTransfer: event.clipboardData });
+      const clipboard = event.clipboardData;
+      if (!typing(event) && !$('#modal-root').childElementCount && (clipboard?.files.length || [...(clipboard?.items || [])].some(item => item.kind === 'file')))
+        acceptFiles({ preventDefault: () => event.preventDefault(), dataTransfer: clipboard });
     });
   }
   if (admin && !archived) name.focus();
@@ -789,22 +795,7 @@ function pickContestUpload(attrs, cb) {
 
 // Collect dropped files and folders as [{file, rel}]
 async function collectDroppedFiles(e) {
-  const items = [];
-  const walk = (entry, prefix) => new Promise((resolve) => {
-    if (entry.isFile) entry.file((f) => { items.push({ file: f, rel: prefix + f.name }); resolve(); }, () => resolve());
-    else if (entry.isDirectory) {
-      const reader = entry.createReader();
-      const all = [];
-      const batch = () => reader.readEntries(async (ents) => {
-        if (!ents.length) { for (const x of all) await walk(x, prefix + entry.name + '/'); resolve(); } else { all.push(...ents); batch(); }
-      }, () => resolve());
-      batch();
-    } else resolve();
-  });
-  const roots = [...e.dataTransfer.items].map((it) => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
-  if (roots.length) for (const r of roots) await walk(r, '');
-  else for (const f of e.dataTransfer.files) items.push({ file: f, rel: f.name });
-  return items;
+  return LemonUpload.collectFiles(e.dataTransfer);
 }
 
 // Ask for the contest name (and whether to overwrite) before importing
@@ -833,7 +824,7 @@ async function importContestZip(file) {
   const opt = await importOptions(file.name.replace(/\.zip$/i, ''));
   if (!opt) return;
   const bar = h('div', { style: { width: '0%' } }), label = h('div', { class: 'progress-label' }, '准备上传…');
-  const dlg = modal({ title: '上传比赛', body: h('div', { style: { width: '400px' } }, h('div', { class: 'progress' }, bar), label), closable: false });
+  const dlg = modal({ title: '上传比赛', body: h('div', { style: { width: 'min(400px, 80vw)' } }, h('div', { class: 'progress' }, bar), label), closable: false });
   try {
     const r = await api('POST', '/api/import-contest' + qs({ name: opt.name, overwrite: opt.overwrite ? 1 : 0 }), undefined, { raw: file,
       onUploadProgress: (sent, total) => { bar.style.width = (total ? sent / total * 100 : 0) + '%'; label.textContent = sent === total ? '正在导入…' : `${formatSize(sent)} / ${formatSize(total)}`; } });
@@ -853,7 +844,7 @@ async function importContestFolder(items) {
   const id = 'web-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const label = h('div', { class: 'progress-label' });
   const bar = h('div', { style: { width: '0%' } });
-  const dlg = modal({ title: '正在上传比赛…', body: h('div', { style: { width: '420px' } }, h('div', { class: 'progress' }, bar), label), closable: false });
+  const dlg = modal({ title: '正在上传比赛…', body: h('div', { style: { width: 'min(420px, 80vw)' } }, h('div', { class: 'progress' }, bar), label), closable: false });
   try {
     let n = 0, sent = 0;
     const total = items.reduce((sum, item) => sum + item.file.size, 0);
@@ -1083,17 +1074,30 @@ function renderTasksTab(page) {
   if (!tasks.length) treeList.appendChild(h('div', { class: 'empty' }, '暂无试题'));
   tasks.forEach((t, i) => {
     const open = S.sel.expanded.has(i);
+    const handle = h('button', { type: 'button', class: 'task-drag-handle', draggable: String(!judging), disabled: judging,
+      'data-task-handle': i, 'aria-label': '拖动排序：' + (t.problemTitle || '试题'), title: '拖动排序，也可用 ↑ / ↓ 调整',
+      onclick: event => event.stopPropagation(), onkeydown: async event => {
+        if (!['ArrowUp', 'ArrowDown'].includes(event.key) || judging) return;
+        event.preventDefault(); event.stopPropagation();
+        const to = i + (event.key === 'ArrowUp' ? -1 : 1);
+        if (to < 0 || to >= tasks.length) return;
+        S.sel.task = i; S.sel.testCase = -1;
+        await moveTaskTo(i, to);
+        document.querySelector(`[data-task-handle="${to}"]`)?.focus();
+      } }, h('span', { 'aria-hidden': 'true' }));
     const taskRow = h('div', {
       class: 'tree-item' + (S.sel.task === i && S.sel.testCase < 0 ? ' selected' : ''),
-      'data-task': i, draggable: !judging,
+      'data-task': i, draggable: 'false',
       onclick: () => { S.sel.task = i; S.sel.testCase = -1; rerenderTasks(); },
       oncontextmenu: pick(i, -1),
     }, h('span', {
       class: 'twisty', onclick: (e) => { e.stopPropagation(); if (S.sel.expanded.has(i)) S.sel.expanded.delete(i); else S.sel.expanded.add(i); rerenderTasks(); },
-    }, open ? '▼' : '▶'), h('span', { class: 'label' }, t.problemTitle || '(未命名)'), h('span', { class: 'score' }, scoreText(t.totalScore)));
-    taskRow.addEventListener('dragstart', e => {
+    }, open ? '▼' : '▶'), handle, h('span', { class: 'label' }, t.problemTitle || '(未命名)'), h('span', { class: 'score' }, scoreText(t.totalScore)));
+    handle.addEventListener('dragstart', e => {
       if (judging) { e.preventDefault(); return; }
       draggedTask = i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('application/x-lemon-task', String(i));
+      e.dataTransfer.setDragImage?.(taskRow, 20, taskRow.offsetHeight / 2);
+      taskRow.classList.add('task-dragging');
     });
     taskRow.addEventListener('dragover', e => {
       if (draggedTask === null || judging) return;
@@ -1108,7 +1112,7 @@ function renderTasksTab(page) {
       draggedTask = null; clearDrop();
       moveTaskTo(from, insertion > from ? insertion - 1 : insertion);
     });
-    taskRow.addEventListener('dragend', () => { draggedTask = null; clearDrop(); });
+    handle.addEventListener('dragend', () => { draggedTask = null; taskRow.classList.remove('task-dragging'); clearDrop(); });
     treeList.appendChild(taskRow);
     if (open) {
       t.testCases.forEach((tc, j) => {
@@ -1555,20 +1559,36 @@ async function importHydroConfig(taskIndex) {
     file.onchange = async () => {
       const selected = file.files[0]; if (!selected) return;
       if (selected.size > 512 * 1024) return toast('配置不能超过 512 KiB', 'error');
-      area.value = await selected.text(); invalidate(); preview();
+      try { area.value = await (await LemonUpload.prepare(selected)).text(); selectedFile.textContent = selected.name; invalidate(); preview(); } catch (error) { fail(error); }
     };
     file.click();
   } }, '选择本地文件');
+  const selectedFile = h('span', { class: 'muted small-text hydro-source', 'aria-live': 'polite' });
+  const serverFile = h('button', { class: 'small', 'aria-label': '选择服务器 Hydro 配置', onclick: async () => {
+    serverFile.disabled = true;
+    try {
+      await loadDataFiles();
+      if (!area.isConnected) return;
+      const file = await pickDataFile('选择服务器 Hydro 配置', /\.(yaml|yml|json)$/i, defaultBase,
+        { priority: name => /\.yaml$/i.test(name) ? 2 : /\.yml$/i.test(name) ? 1 : 0 });
+      if (!file || !area.isConnected) return;
+      const content = await api('GET', cpath() + '/files/download' + qs({ root: 'data', path: file, text: 1 }));
+      if (content.binary || content.truncated || content.size > 512 * 1024) throw Error('配置须为不超过 512 KiB 的文本文件');
+      area.value = content.content; base.value = parentPath(file); selectedFile.textContent = 'data/' + file;
+      invalidate(); preview();
+    } catch (error) { fail(error); } finally { serverFile.disabled = false; }
+  } }, '选择服务器文件');
   let apply;
   const dialog = modal({ title: '导入 Hydro 配置',
     body: h('div', { style: { width: 'min(800px, 84vw)' } },
-      h('div', { class: 'row', style: { marginBottom: '8px' } }, local, h('span', { class: 'muted small-text' }, '或粘贴 YAML / JSON')),
+      h('div', { class: 'row', style: { marginBottom: '8px' } }, serverFile, local, h('span', { class: 'muted small-text' }, '或粘贴 YAML / JSON')),
+      selectedFile,
       area, h('div', { class: 'row', style: { marginTop: '8px' } }, h('span', null, '数据目录'), base,
         h('button', { class: 'small', onclick: preview }, '解析')),
       status, warnings, compileRow),
     buttons: [{ label: '取消' }, { label: '导入', primary: true, onClick: async () => {
       if (!parsed || busy) return false;
-      busy = true; area.disabled = base.disabled = local.disabled = compile.disabled = true;
+      busy = true; area.disabled = base.disabled = local.disabled = serverFile.disabled = compile.disabled = true;
       try {
         const patch = { ...parsed.patch };
         let compileFailed = false;
@@ -1587,7 +1607,7 @@ async function importHydroConfig(taskIndex) {
         if (compileFailed) { status.textContent = '其余配置已导入，可关闭或修正后重试'; return false; }
         return true;
       } catch (error) { status.className = 'small-text error-text'; status.textContent = error.message; return false; }
-      finally { busy = false; area.disabled = base.disabled = local.disabled = compile.disabled = false; }
+      finally { busy = false; area.disabled = base.disabled = local.disabled = serverFile.disabled = compile.disabled = false; }
     } }],
     beforeClose: () => !busy,
   });
@@ -2627,6 +2647,7 @@ const FS_SHORTCUTS = [
 
 async function renderFilesTab(page) {
   const F = S.fs;
+  const uploadContest = S.contest.name;
   const readOnly = !!S.contest.archived;
   if (readOnly) F.clip = null;
   F.sort = F.sort || { key: 'name', dir: 1 };
@@ -2639,6 +2660,7 @@ async function renderFilesTab(page) {
   const names = new Set(entries.map((e) => e.name));
   F.selected = new Set([...(F.selected || [])].filter((n) => names.has(n)));
   const reload = async (keep) => {
+    if (S.contest?.name !== uploadContest || !page.isConnected) return;
     F.cache.clear();
     if (keep !== undefined) F.selected = new Set(keep);
     page.innerHTML = '';
@@ -2738,12 +2760,17 @@ async function renderFilesTab(page) {
     if (!items.length) return;
     const label = h('div', null, '准备上传…');
     const bar = h('div', { style: { width: '0%' }, 'data-upload-progress': true });
-    const dlg = modal({ title: '上传到 /' + dir, body: h('div', { style: { width: '420px' } }, h('div', { class: 'progress' }, bar), h('div', { class: 'progress-label' }, label)), closable: false });
-    const base = cpath(), total = items.reduce((sum, item) => sum + item.file.size, 0), uploaded = [];
-    let sent = 0;
+    const dlg = modal({ title: '上传到 /' + dir, body: h('div', { style: { width: 'min(420px, 80vw)' } }, h('div', { class: 'progress' }, bar), h('div', { class: 'progress-label' }, label)), closable: false });
+    const base = cpath(uploadContest), total = items.reduce((sum, item) => sum + (item.file?.size || 0), 0), uploaded = [];
+    let sent = 0, currentPath = '';
     try {
       for (const it of items) {
+        currentPath = it.rel;
         label.textContent = `${uploaded.length + 1} / ${items.length} · ${it.rel}`;
+        if (it.directory) {
+          await api('POST', base + '/files/mkdir', { root: 'contest', path: joinPath(dir, it.rel) });
+          uploaded.push(it); continue;
+        }
         await api('PUT', base + '/files/upload' + qs({ root: 'contest', path: joinPath(dir, it.rel) }), undefined, { raw: it.file, onUploadProgress: loaded => {
           const count = sent + loaded;
           bar.style.width = (total ? count / total * 100 : (uploaded.length + 1) / items.length * 100) + '%';
@@ -2751,8 +2778,9 @@ async function renderFilesTab(page) {
         } });
         sent += it.file.size; uploaded.push(it);
       }
-      toast(`已上传 ${items.length} 个文件`);
-    } catch (e) { fail(e); } finally {
+      const directories = items.filter(item => item.directory).length;
+      toast(`已上传 ${items.length - directories} 个文件` + (directories ? `、${directories} 个文件夹` : ''));
+    } catch (e) { toast(`${currentPath}：${e.message}（已完成 ${uploaded.length}/${items.length} 项）`, 'error'); } finally {
       dlg.close(true);
       F.expanded.add(dir);
       reload(dir === F.path ? [...new Set(uploaded.map((it) => it.rel.split('/')[0]))] : undefined);
@@ -2770,9 +2798,9 @@ async function renderFilesTab(page) {
     }));
     if (!ok) return;
     const bar = h('div', { style: { width: '0%' } }), label = h('div', { class: 'progress-label' }, '准备上传…');
-    const dlg = modal({ title: '上传并解压', body: h('div', { style: { width: '400px' } }, h('div', { class: 'progress' }, bar), label), closable: false });
+    const dlg = modal({ title: '上传并解压', body: h('div', { style: { width: 'min(400px, 80vw)' } }, h('div', { class: 'progress' }, bar), label), closable: false });
     try {
-      const r = await api('POST', cpath() + '/files/unzip' + qs({ root: 'contest', path: dir, stripTop: strip.checked ? 1 : 0 }), undefined, { raw: file,
+      const r = await api('POST', cpath(uploadContest) + '/files/unzip' + qs({ root: 'contest', path: dir, stripTop: strip.checked ? 1 : 0 }), undefined, { raw: file,
         onUploadProgress: (sent, total) => { bar.style.width = (total ? sent / total * 100 : 0) + '%'; label.textContent = sent === total ? '正在解压…' : `${formatSize(sent)} / ${formatSize(total)}`; } });
       toast(`已解压 ${r.files} 个文件`);
     } catch (e) { fail(e); } finally { dlg.close(true); reload(); }
@@ -2787,22 +2815,7 @@ async function renderFilesTab(page) {
   const uploadFolder = (dir = F.path) => pick({ webkitdirectory: true, multiple: true }, (fs) => uploadTo(dir, fs.map((f) => ({ file: f, rel: f.webkitRelativePath || f.name }))));
   const uploadZip = (dir = F.path) => pick({ accept: '.zip' }, (fs) => fs.length && unzipTo(dir, fs[0]));
   const collectDrop = async (e) => {
-    const items = [];
-    const walk = (entry, prefix) => new Promise((resolve) => {
-      if (entry.isFile) entry.file((f) => { items.push({ file: f, rel: prefix + f.name }); resolve(); }, () => resolve());
-      else if (entry.isDirectory) {
-        const reader = entry.createReader();
-        const all = [];
-        const batch = () => reader.readEntries(async (ents) => {
-          if (!ents.length) { for (const x of all) await walk(x, prefix + entry.name + '/'); resolve(); } else { all.push(...ents); batch(); }
-        }, () => resolve());
-        batch();
-      } else resolve();
-    });
-    const roots = [...e.dataTransfer.items].map((it) => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
-    if (roots.length) for (const r of roots) await walk(r, '');
-    else for (const f of e.dataTransfer.files) items.push({ file: f, rel: f.name });
-    return items;
+    return LemonUpload.collectFiles(e.dataTransfer, { includeDirectories: true });
   };
   // Folder drop target: internal drags move/copy, external files upload.
   const dropTarget = (el, dirFn, cls = 'drop') => {
@@ -2830,11 +2843,13 @@ async function renderFilesTab(page) {
         try { await fsTransfer(copy ? 'copy' : 'move', paths, dir); reload(dir === F.path ? undefined : []); } catch (err) { fail(err); }
         return;
       }
-      const items = await collectDrop(e);
-      if (items.length === 1 && /\.zip$/i.test(items[0].file.name)) {
-        if (await confirmDlg(`解压 ${items[0].file.name}？选择“取消”则直接上传 zip 文件。`, '解压', false)) return unzipTo(dir, items[0].file);
-      }
-      uploadTo(dir, items);
+      try {
+        const items = await collectDrop(e);
+        if (items.length === 1 && /\.zip$/i.test(items[0].file?.name || '')) {
+          if (await confirmDlg(`解压 ${items[0].file.name}？选择“取消”则直接上传 zip 文件。`, '解压', false)) return unzipTo(dir, items[0].file);
+        }
+        uploadTo(dir, items);
+      } catch (error) { fail(error); }
     });
   };
 
@@ -3056,9 +3071,12 @@ async function renderFilesTab(page) {
       if (readOnly) return;
       pasteSerial++;
       const clipboard = event.clipboardData;
-      const files = [...(clipboard?.files || [])];
-      if (!files.length) for (const item of clipboard?.items || []) if (item.kind === 'file') { const file = item.getAsFile(); if (file) files.push(file); }
-      if (files.length) { event.preventDefault(); uploadTo(F.path, files.map(file => ({ file, rel: file.name }))); }
+      const hasFiles = clipboard?.files.length || [...(clipboard?.items || [])].some(item => item.kind === 'file');
+      if (hasFiles) {
+        event.preventDefault();
+        const destination = F.path;
+        LemonUpload.collectFiles(clipboard, { includeDirectories: true }).then(items => uploadTo(destination, items)).catch(fail);
+      }
       else if (F.clip) { event.preventDefault(); paste(); }
     },
     keydown: (e) => {
@@ -3146,7 +3164,7 @@ function taskDataFolder(task) {
 }
 
 // Choose a file of data/. Files in `folder` come first; type to filter, ↑↓ / Enter / double-click.
-function pickDataFile(title, accept = null, folder = '') {
+function pickDataFile(title, accept = null, folder = '', options = {}) {
   return new Promise(resolve => {
     let selected = null, current = '';
     const list = h('div', { class: 'file-pick', role: 'listbox', tabindex: '0', 'aria-label': '数据文件' });
@@ -3155,11 +3173,11 @@ function pickDataFile(title, accept = null, folder = '') {
     function draw() {
       const needle = filter.value.toLowerCase();
       const matches = S.dataFiles.filter(file => (!accept || accept.test(file)) && file.toLowerCase().includes(needle))
-        .sort((a, b) => (inFolder(b) - inFolder(a)) || lessFileName(a, b));
+        .sort((a, b) => ((options.priority?.(b) || 0) - (options.priority?.(a) || 0)) || (inFolder(b) - inFolder(a)) || lessFileName(a, b));
       if (!matches.includes(current)) current = matches[0] || '';
       list.replaceChildren(...(matches.length ? matches.map(file => {
         const cut = file.lastIndexOf('/');
-        return h('div', { class: 'file-pick-item' + (file === current ? ' selected' : ''), role: 'option', 'data-file': file, 'aria-selected': String(file === current),
+        return h('div', { class: 'file-pick-item' + (file === current ? ' selected' : ''), role: 'option', title: file, 'data-file': file, 'aria-selected': String(file === current),
           onclick: () => { current = file; paint(); }, ondblclick: () => { current = file; if (choose() !== false) dialog.close(true); } },
         h('span', { class: 'icon' }, fileIcon(file)), h('span', { class: 'name' }, file.slice(cut + 1)), cut > 0 ? h('span', { class: 'dir' }, file.slice(0, cut + 1)) : null);
       }) : [h('div', { class: 'empty' }, '暂无匹配文件')]));

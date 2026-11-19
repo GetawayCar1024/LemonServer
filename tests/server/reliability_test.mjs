@@ -49,6 +49,10 @@ await withServer(async ({ api, request }) => {
   const first = { 'X-CodeHub-Instance': 'first-codehub-001' }, second = { 'X-CodeHub-Instance': 'second-codehub-002' };
   await api('PUT', base + '/files/upload?root=source&path=alice/a.cpp', undefined, { raw: 'first private source', headers: first });
   await api('PUT', base + '/files/upload?root=source&path=bob/a.cpp', undefined, { raw: 'second private source', headers: second });
+  const blocked = await api('PUT', base + '/files/upload?root=contest&path=note.txt/child.txt', undefined, { raw: 'must not replace the parent', expect: 500 });
+  assert.match(blocked.error, /destination folder/i);
+  assert.equal((await api('GET', base + '/files/download?root=contest&path=note.txt&text=1')).content, 'note.txt');
+  console.log('PASS failed upload destinations return a storage error and preserve existing files');
   await api('POST', base + '/files/mkdir', { root: 'contest', path: 'one/empty' });
   await api('POST', base + '/archive');
   const response = await request('POST', base + '/files/download-selection', { body: { root: 'contest', paths: ['one', 'two', 'note.txt'] } });

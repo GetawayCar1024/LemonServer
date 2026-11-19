@@ -183,6 +183,15 @@ table.results td.total { font-weight: 700; }
 .sort-icon .down { border-top: 4px solid currentColor; }
 .sort-icon.asc .up, .sort-icon.desc .down { opacity: 1; color: var(--text); }
 .sort-icon.asc .down, .sort-icon.desc .up { visibility: hidden; }
+.task-drag-handle { flex: none; width: 24px; height: 26px; display: inline-flex; align-items: center; justify-content: center; padding: 4px; border: 0; background: transparent; color: var(--muted); cursor: grab; }
+.task-drag-handle span { width: 10px; height: 16px; background-image: radial-gradient(circle, currentColor 1px, transparent 1.5px); background-size: 5px 5px; }
+.task-drag-handle:hover:not(:disabled), .task-drag-handle:focus-visible { color: var(--accent); background: var(--fill); }
+.task-drag-handle:active { cursor: grabbing; }
+.task-drag-handle:disabled { cursor: default; opacity: .35; }
+.task-dragging { opacity: .55; }
+.tree-list .tree-item.child { padding-left: 60px; }
+.tree-item.selected .task-drag-handle { color: rgba(255, 255, 255, .85); }
+.hydro-source { display: block; overflow-wrap: anywhere; margin-bottom: 6px; }
 /* task scope of the judge buttons */
 .scope-button { gap: 6px; max-width: 220px; }
 .scope-button .scope-label { overflow: hidden; text-overflow: ellipsis; }
@@ -235,8 +244,8 @@ table.files tr.file-row:hover .actions { visibility: visible; }
 .file-pick-item:hover { background: var(--fill-soft); }
 .file-pick-item.selected { background: var(--tree-sel); color: #fff; }
 .file-pick-item .icon { width: 18px; text-align: center; flex: none; }
-.file-pick-item .name { font-family: "SF Mono", Menlo, Consolas, "Cascadia Mono", monospace; font-size: 13px; }
-.file-pick-item .dir { margin-left: auto; padding-left: 12px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.file-pick-item .name { font-family: "SF Mono", Menlo, Consolas, "Cascadia Mono", monospace; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.file-pick-item .dir { margin-left: auto; padding-left: 12px; color: var(--muted); font-size: 12px; max-width: 50%; overflow: hidden; text-overflow: ellipsis; }
 .file-pick-item.selected .dir { color: rgba(255, 255, 255, .8); }
 
 /* text editor */
@@ -258,7 +267,7 @@ table.files tr.file-row:hover .actions { visibility: visible; }
 /* ---------- judging ---------- */
 .progress { height: 6px; background: var(--fill); border-radius: 3px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s; }
-.progress-label { font-size: 12.5px; color: var(--muted); margin: 8px 0 0; }
+.progress-label { font-size: 12.5px; color: var(--muted); margin: 8px 0 0; overflow-wrap: anywhere; }
 .judge-log { height: 420px; width: 760px; max-width: 86vw; overflow: auto; border-radius: var(--radius); padding: 10px 12px; font-size: 13px; background: var(--panel-2); border: 1px solid var(--sep); margin-top: 12px; line-height: 1.65; }
 .judge-log .l1 { font-weight: 600; margin-top: 4px; }
 .judge-log .l2 { padding-left: 14px; }
@@ -268,8 +277,8 @@ table.files tr.file-row:hover .actions { visibility: visible; }
 .tag { display: inline-block; padding: 0 7px; border-radius: 5px; font-size: 12.5px; }
 
 /* ---------- toast ---------- */
-#toast-root { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 200; pointer-events: none; }
-.toast { background: rgba(30, 30, 30, .88); color: #fff; padding: 9px 16px; border-radius: 20px; box-shadow: 0 4px 18px rgba(0, 0, 0, .2); max-width: 520px; font-size: 13.5px; backdrop-filter: blur(10px); animation: pop .2s ease-out; }
+#toast-root { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); width: min(520px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 200; pointer-events: none; }
+.toast { background: rgba(30, 30, 30, .88); color: #fff; padding: 9px 16px; border-radius: 14px; box-shadow: 0 4px 18px rgba(0, 0, 0, .2); max-width: 100%; overflow-wrap: anywhere; font-size: 13.5px; backdrop-filter: blur(10px); animation: pop .2s ease-out; }
 .toast.error { background: rgba(215, 40, 30, .92); }
 
 /* ---------- misc ---------- */

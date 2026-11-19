@@ -2074,12 +2074,12 @@ void LemonServer::setupFileRoutes() {
 			             return okResponse({{"size", double(req.body().size())},
 			                                {"unchanged", true},
 			                                {"modified", QFileInfo(abs).lastModified().toString("yyyy-MM-dd hh:mm:ss")}});
-		             QDir().mkpath(QFileInfo(abs).absolutePath());
-		             QFile f(abs);
-		             if (! f.open(QFile::WriteOnly))
-			             return errorResponse(Status::InternalServerError, tr("Cannot write %1").arg(abs));
-		             f.write(req.body());
-		             f.close();
+		             if (!QDir().mkpath(QFileInfo(abs).absolutePath()))
+			             return errorResponse(Status::InternalServerError, tr("Cannot create the destination folder"));
+		             QSaveFile f(abs);
+		             f.setDirectWriteFallback(false);
+		             if (!f.open(QFile::WriteOnly) || f.write(req.body()) != req.body().size() || !f.commit())
+			             return errorResponse(Status::InternalServerError, tr("Cannot save %1: %2").arg(QFileInfo(abs).fileName(), f.errorString()));
 		             sourceChanged(abs);
 		             return okResponse({{"size", double(req.body().size())},
 		                                {"modified", QFileInfo(abs).lastModified().toString("yyyy-MM-dd hh:mm:ss")}});
