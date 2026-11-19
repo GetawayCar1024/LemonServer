@@ -62,7 +62,7 @@ await withBrowser(async ({ api, js, wait, click, open, send }) => {
   await js(`[...document.querySelectorAll('tr.file-row')].find(row=>row.querySelector('td.name')?.textContent.trim().endsWith('clipboard-folder')).dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
   await wait(`S.fs.path === 'clipboard-folder' && document.querySelector('.crumbs')?.textContent.includes('clipboard-folder')`);
   await js('window.releasePaste()');
-  await wait(`!document.querySelector('.modal-back') && document.querySelector('#toast-root').textContent.includes('已上传 1 个文件')`);
+  await wait(`!document.querySelector('.modal-back') && !!document.querySelector('.fs-list') && document.querySelector('#toast-root').textContent.includes('已上传 1 个文件')`);
   assert.equal((await api('GET', base + '/files/download?root=contest&path=delayed.txt&text=1')).content, 'original directory');
   assert.ok(!(await api('GET', base + '/files?root=contest&path=clipboard-folder')).entries.some(item => item.name === 'delayed.txt'));
 
@@ -77,7 +77,7 @@ await withBrowser(async ({ api, js, wait, click, open, send }) => {
   await js(`go('#/contest/other-upload/files')`);
   await wait(`S.contest?.name === 'other-upload' && !!document.querySelector('.fs-list')`);
   await js('window.releasePaste()');
-  await wait(`!document.querySelector('.modal-back') && document.querySelector('#toast-root').textContent.includes('已上传 1 个文件')`);
+  await wait(`!document.querySelector('.modal-back') && !!document.querySelector('.fs-list') && document.querySelector('#toast-root').textContent.includes('已上传 1 个文件')`);
   assert.equal((await api('GET', base + '/files/download?root=contest&path=clipboard-folder/delayed.txt&text=1')).content, 'original contest');
   assert.ok(!(await api('GET', '/api/contests/other-upload/files?root=contest')).entries.some(item => item.name === 'delayed.txt' || item.name === 'clipboard-folder'));
   assert.equal(await js('S.contest.name'), 'other-upload');
