@@ -324,7 +324,8 @@ function formatSize(n) {
   return (n / 1024 / 1024).toFixed(2) + ' MiB';
 }
 
-const field = (label, input, hint) => [h('label', null, label), hint ? h('div', null, input, h('div', { class: 'hint' }, hint)) : input];
+// One row of a grouped form: the label, then the control with an optional hint below it.
+const field = (label, input, hint) => [h('label', null, label), h('div', { class: 'field' }, input, hint ? h('div', { class: 'hint' }, hint) : null)];
 
 // ---------- colors: port of ColorTheme::getColorPer / getColorGrand ----------
 function makePer(p, l, r, bound, distanRate = 1, resComp = 0) {
@@ -1019,8 +1020,8 @@ function renderTasksTab(page) {
         h('button', { class: 'small', onclick: () => addTestCase(), disabled: judging || noTask, title: 'Insert' }, '＋ 测试点'),
         h('button', { class: 'small', onclick: autoAddTasks, disabled: judging, title: '添加 data 中的新试题' }, '自动添加')),
       h('div', { class: 'row' },
-        h('button', { class: 'small', onclick: () => moveTask(-1), disabled: judging || S.sel.task <= 0 || onCase }, '↑ 上移'),
-        h('button', { class: 'small', onclick: () => moveTask(1), disabled: judging || noTask || onCase || S.sel.task >= S.contest.tasks.length - 1 }, '↓ 下移'),
+        h('button', { class: 'small', onclick: () => moveTask(-1), disabled: judging || S.sel.task <= 0 || onCase, title: 'Alt+↑' }, '↑ 上移'),
+        h('button', { class: 'small', onclick: () => moveTask(1), disabled: judging || noTask || onCase || S.sel.task >= S.contest.tasks.length - 1, title: 'Alt+↓' }, '↓ 下移'),
         h('button', { class: 'small danger right', onclick: deleteSelected, disabled: judging || noTask, title: 'Delete' }, '删除'))));
   page.appendChild(h('div', { class: 'split' }, tree, editor));
 
@@ -1060,6 +1061,10 @@ function renderTasksTab(page) {
   S.pageKeys = {
     root: tree,
     keydown: (e) => {
+      // Alt+↑ / Alt+↓ moves the selected task, like dragging it
+      if (!judging && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && S.sel.task >= 0 && S.sel.testCase < 0) {
+        e.preventDefault(); moveTask(e.key === 'ArrowUp' ? -1 : 1); return;
+      }
       if (judging || (e.key !== 'Insert' && e.key !== 'Delete')) return;
       e.preventDefault();
       if (e.key === 'Insert' && (e.ctrlKey || e.metaKey)) addTask();
@@ -1074,29 +1079,19 @@ function renderTasksTab(page) {
   if (!tasks.length) treeList.appendChild(h('div', { class: 'empty' }, '暂无试题'));
   tasks.forEach((t, i) => {
     const open = S.sel.expanded.has(i);
-    const handle = h('button', { type: 'button', class: 'task-drag-handle', draggable: String(!judging), disabled: judging,
-      'data-task-handle': i, 'aria-label': '拖动排序：' + (t.problemTitle || '试题'), title: '拖动排序，也可用 ↑ / ↓ 调整',
-      onclick: event => event.stopPropagation(), onkeydown: async event => {
-        if (!['ArrowUp', 'ArrowDown'].includes(event.key) || judging) return;
-        event.preventDefault(); event.stopPropagation();
-        const to = i + (event.key === 'ArrowUp' ? -1 : 1);
-        if (to < 0 || to >= tasks.length) return;
-        S.sel.task = i; S.sel.testCase = -1;
-        await moveTaskTo(i, to);
-        document.querySelector(`[data-task-handle="${to}"]`)?.focus();
-      } }, h('span', { 'aria-hidden': 'true' }));
+    // the whole row is dragged; the grip only shows that it can be (Alt+↑/↓ and the buttons move it too)
     const taskRow = h('div', {
-      class: 'tree-item' + (S.sel.task === i && S.sel.testCase < 0 ? ' selected' : ''),
-      'data-task': i, draggable: 'false',
+      class: 'tree-item task-row' + (S.sel.task === i && S.sel.testCase < 0 ? ' selected' : ''),
+      'data-task': i, draggable: String(!judging),
       onclick: () => { S.sel.task = i; S.sel.testCase = -1; rerenderTasks(); },
       oncontextmenu: pick(i, -1),
     }, h('span', {
-      class: 'twisty', onclick: (e) => { e.stopPropagation(); if (S.sel.expanded.has(i)) S.sel.expanded.delete(i); else S.sel.expanded.add(i); rerenderTasks(); },
-    }, open ? '▼' : '▶'), handle, h('span', { class: 'label' }, t.problemTitle || '(未命名)'), h('span', { class: 'score' }, scoreText(t.totalScore)));
-    handle.addEventListener('dragstart', e => {
+      class: 'twisty' + (open ? ' open' : ''), onclick: (e) => { e.stopPropagation(); if (S.sel.expanded.has(i)) S.sel.expanded.delete(i); else S.sel.expanded.add(i); rerenderTasks(); },
+    }), h('span', { class: 'label' }, t.problemTitle || '(未命名)'), h('span', { class: 'score' }, scoreText(t.totalScore)),
+    judging ? null : h('span', { class: 'reorder-grip', 'aria-hidden': 'true' }));
+    taskRow.addEventListener('dragstart', e => {
       if (judging) { e.preventDefault(); return; }
       draggedTask = i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('application/x-lemon-task', String(i));
-      e.dataTransfer.setDragImage?.(taskRow, 20, taskRow.offsetHeight / 2);
       taskRow.classList.add('task-dragging');
     });
     taskRow.addEventListener('dragover', e => {
@@ -1112,7 +1107,7 @@ function renderTasksTab(page) {
       draggedTask = null; clearDrop();
       moveTaskTo(from, insertion > from ? insertion - 1 : insertion);
     });
-    handle.addEventListener('dragend', () => { draggedTask = null; taskRow.classList.remove('task-dragging'); clearDrop(); });
+    taskRow.addEventListener('dragend', () => { draggedTask = null; taskRow.classList.remove('task-dragging'); clearDrop(); });
     treeList.appendChild(taskRow);
     if (open) {
       t.testCases.forEach((tc, j) => {
@@ -1559,36 +1554,51 @@ async function importHydroConfig(taskIndex) {
     file.onchange = async () => {
       const selected = file.files[0]; if (!selected) return;
       if (selected.size > 512 * 1024) return toast('配置不能超过 512 KiB', 'error');
-      try { area.value = await (await LemonUpload.prepare(selected)).text(); selectedFile.textContent = selected.name; invalidate(); preview(); } catch (error) { fail(error); }
+      try { area.value = await (await LemonUpload.prepare(selected)).text(); serverPath.value = loaded = ''; source.textContent = '已载入本地文件 ' + selected.name; invalidate(); preview(); } catch (error) { fail(error); }
     };
     file.click();
   } }, '选择本地文件');
-  const selectedFile = h('span', { class: 'muted small-text hydro-source', 'aria-live': 'polite' });
-  const serverFile = h('button', { class: 'small', 'aria-label': '选择服务器 Hydro 配置', onclick: async () => {
-    serverFile.disabled = true;
+  // Like the checker field: the configuration files of data/ are suggested under the input, .yaml first.
+  const configs = h('datalist', { id: 'hydro-configs' });
+  const rank = name => (/\.yaml$/i.test(name) ? 0 : /\.yml$/i.test(name) ? 1 : 2) - (defaultBase && name.startsWith(defaultBase + '/') ? 0.5 : 0);
+  const suggest = () => {
+    configs.replaceChildren(...S.dataFiles.filter(name => /\.(ya?ml|json)$/i.test(name))
+      .sort((a, b) => rank(a) - rank(b) || lessFileName(a, b)).map(name => h('option', { value: name })));
+    serverPath.placeholder = 'data 中的配置文件，如 ' + (configs.firstChild?.value || 'sum/config.yaml');
+  };
+  const source = h('div', { class: 'muted small-text hydro-source', 'aria-live': 'polite' }, '或粘贴 YAML / JSON，或选择本地文件');
+  let loaded = '', reading = 0;
+  const load = async (file) => {
+    const serial = ++reading;
     try {
-      await loadDataFiles();
-      if (!area.isConnected) return;
-      const file = await pickDataFile('选择服务器 Hydro 配置', /\.(yaml|yml|json)$/i, defaultBase,
-        { priority: name => /\.yaml$/i.test(name) ? 2 : /\.yml$/i.test(name) ? 1 : 0 });
-      if (!file || !area.isConnected) return;
       const content = await api('GET', cpath() + '/files/download' + qs({ root: 'data', path: file, text: 1 }));
+      if (serial !== reading || !area.isConnected) return;
       if (content.binary || content.truncated || content.size > 512 * 1024) throw Error('配置须为不超过 512 KiB 的文本文件');
-      area.value = content.content; base.value = parentPath(file); selectedFile.textContent = 'data/' + file;
+      area.value = content.content; base.value = parentPath(file); loaded = file;
+      source.textContent = '已载入 data/' + file;
       invalidate(); preview();
-    } catch (error) { fail(error); } finally { serverFile.disabled = false; }
-  } }, '选择服务器文件');
+    } catch (error) { if (serial === reading) fail(error); }
+  };
+  const serverPath = h('input', { type: 'text', class: 'mono', list: 'hydro-configs', 'aria-label': '服务器上的 Hydro 配置', autocomplete: 'off', style: { flex: '1 1 300px' },
+    oninput: () => { const value = serverPath.value.trim(); if (value !== loaded && S.dataFiles.includes(value)) load(value); },
+    onkeydown: event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      const value = serverPath.value.trim();
+      if (S.dataFiles.includes(value)) load(value); else if (value) toast('data 中没有 ' + value, 'error');
+    } });
+  suggest();
+  loadDataFiles().then(() => { if (configs.isConnected) suggest(); }).catch(() => {});
   let apply;
   const dialog = modal({ title: '导入 Hydro 配置',
     body: h('div', { style: { width: 'min(800px, 84vw)' } },
-      h('div', { class: 'row', style: { marginBottom: '8px' } }, serverFile, local, h('span', { class: 'muted small-text' }, '或粘贴 YAML / JSON')),
-      selectedFile,
+      h('div', { class: 'row' }, serverPath, local), configs, source,
       area, h('div', { class: 'row', style: { marginTop: '8px' } }, h('span', null, '数据目录'), base,
         h('button', { class: 'small', onclick: preview }, '解析')),
       status, warnings, compileRow),
     buttons: [{ label: '取消' }, { label: '导入', primary: true, onClick: async () => {
       if (!parsed || busy) return false;
-      busy = true; area.disabled = base.disabled = local.disabled = serverFile.disabled = compile.disabled = true;
+      busy = true; area.disabled = base.disabled = local.disabled = serverPath.disabled = compile.disabled = true;
       try {
         const patch = { ...parsed.patch };
         let compileFailed = false;
@@ -1607,7 +1617,7 @@ async function importHydroConfig(taskIndex) {
         if (compileFailed) { status.textContent = '其余配置已导入，可关闭或修正后重试'; return false; }
         return true;
       } catch (error) { status.className = 'small-text error-text'; status.textContent = error.message; return false; }
-      finally { busy = false; area.disabled = base.disabled = local.disabled = serverFile.disabled = compile.disabled = false; }
+      finally { busy = false; area.disabled = base.disabled = local.disabled = serverPath.disabled = compile.disabled = false; }
     } }],
     beforeClose: () => !busy,
   });
@@ -2619,7 +2629,7 @@ function pickFolder(title, initial, excluded) {
           class: 'tree-item' + (path === chosen ? ' selected' : ''), style: { paddingLeft: (8 + depth * 14) + 'px', opacity: bad ? 0.4 : 1 },
           onclick: () => { if (!bad) { chosen = path; draw(); } },
           ondblclick: () => { if (!bad) { chosen = path; result = path; dlg.close(true); } },
-        }, h('span', { class: 'twisty', onclick: (e) => { e.stopPropagation(); if (open) expanded.delete(path); else expanded.add(path); draw(); } }, open ? '▼' : '▶'),
+        }, h('span', { class: 'twisty' + (open ? ' open' : ''), onclick: (e) => { e.stopPropagation(); if (open) expanded.delete(path); else expanded.add(path); draw(); } }),
         h('span', { class: 'label' }, (depth === 0 ? '🍋 ' : '📁 ') + label)));
         if (!open) return;
         let list = S.fs.cache.get(path);
@@ -2864,8 +2874,8 @@ async function renderFilesTab(page) {
         onclick: () => go(path),
         oncontextmenu: (e) => { e.preventDefault(); folderMenu(e.clientX, e.clientY, path); },
       }, h('span', {
-        class: 'twisty', onclick: (e) => { e.stopPropagation(); if (open) F.expanded.delete(path); else F.expanded.add(path); drawTree(); },
-      }, open ? '▼' : '▶'), h('span', { class: 'label' }, (depth === 0 ? '🍋 ' : '📁 ') + label));
+        class: 'twisty' + (open ? ' open' : ''), onclick: (e) => { e.stopPropagation(); if (open) F.expanded.delete(path); else F.expanded.add(path); drawTree(); },
+      }), h('span', { class: 'label' }, (depth === 0 ? '🍋 ' : '📁 ') + label));
       dropTarget(item, () => path);
       frag.appendChild(item);
       if (!open) return;
@@ -3164,7 +3174,7 @@ function taskDataFolder(task) {
 }
 
 // Choose a file of data/. Files in `folder` come first; type to filter, ↑↓ / Enter / double-click.
-function pickDataFile(title, accept = null, folder = '', options = {}) {
+function pickDataFile(title, accept = null, folder = '') {
   return new Promise(resolve => {
     let selected = null, current = '';
     const list = h('div', { class: 'file-pick', role: 'listbox', tabindex: '0', 'aria-label': '数据文件' });
@@ -3173,7 +3183,7 @@ function pickDataFile(title, accept = null, folder = '', options = {}) {
     function draw() {
       const needle = filter.value.toLowerCase();
       const matches = S.dataFiles.filter(file => (!accept || accept.test(file)) && file.toLowerCase().includes(needle))
-        .sort((a, b) => ((options.priority?.(b) || 0) - (options.priority?.(a) || 0)) || (inFolder(b) - inFolder(a)) || lessFileName(a, b));
+        .sort((a, b) => (inFolder(b) - inFolder(a)) || lessFileName(a, b));
       if (!matches.includes(current)) current = matches[0] || '';
       list.replaceChildren(...(matches.length ? matches.map(file => {
         const cut = file.lastIndexOf('/');

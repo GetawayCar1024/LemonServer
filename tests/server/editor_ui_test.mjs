@@ -77,9 +77,9 @@ await withBrowser(async ({ api, js, wait, click, drag, open, delay }) => {
   await api('PUT', contest + '/files/upload?' + new URLSearchParams({ root: 'data', path: 'sum/pc.cpp' }), undefined,
     '#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);ouf.readInt();quitf(_pc(50),"half");}\n');
   await open('editor-test');
-  assert.equal(await js(`document.querySelector('[data-task="0"]').draggable`), false);
-  assert.equal(await js(`document.querySelector('[data-task-handle="0"]').draggable`), true);
-  await js(`(()=>{const source=document.querySelector('[data-task-handle="0"]');const target=document.querySelector('[data-task="2"]');const r=target.getBoundingClientRect();const dataTransfer=new DataTransfer();source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer}));target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer,clientY:r.bottom-1}));target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer,clientY:r.bottom-1}));source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer}));})()`);
+  assert.equal(await js(`document.querySelector('[data-task="0"]').draggable`), true, 'the whole row is dragged');
+  assert.equal(await js(`!!document.querySelector('[data-task="0"] .reorder-grip')`), true);
+  await js(`(()=>{const source=document.querySelector('[data-task="0"]');const target=document.querySelector('[data-task="2"]');const r=target.getBoundingClientRect();const dataTransfer=new DataTransfer();source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer}));target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer,clientY:r.bottom-1}));target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer,clientY:r.bottom-1}));source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer}));})()`);
   await wait(`[...document.querySelectorAll('.tree-item:not(.child) .label')].map(x=>x.textContent).join(',') === 'second,third,求和'`);
   assert.deepEqual((await api('GET', contest)).tasks.map(item => item.sourceFileName), ['second', 'third', 'sum']);
   assert.equal((await api('GET', contest + '/contestants/alice')).details[2].taskScore, 60, 'judged results must move with their task');
